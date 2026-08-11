@@ -1,0 +1,9 @@
+#!/bin/sh
+. /www/cgi-bin/_remna.sh
+json_headers
+source_present=false; [ -s "$SOURCE" ] && source_present=true
+final_present=false; [ -s "$FINAL" ] && final_present=true
+error_b64=$(b64 "$(cat "$ERROR_FILE" 2>/dev/null || true)")
+meta_b64=$(b64 "$(cat "$META" 2>/dev/null || true)")
+printf '{"ok":true,"source_present":%s,"final_present":%s,"mihomo_running":%s,"error_b64":"%s","meta_b64":"%s"}\n' \
+  "$source_present" "$final_present" "$(pidof mihomo >/dev/null 2>&1 && echo true || echo false)" "$error_b64" "$meta_b64"

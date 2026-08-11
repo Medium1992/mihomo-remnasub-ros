@@ -1,0 +1,5 @@
+#!/bin/sh
+. /www/cgi-bin/_remna.sh
+case "${QUERY_STRING:-}" in kind=source*) file="$SOURCE" ;; kind=final*) file="$FINAL" ;; *) file='' ;; esac
+text_headers
+[ -n "$file" ] && [ -f "$file" ] && cat "$file"

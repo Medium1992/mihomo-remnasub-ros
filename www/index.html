@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>RemnaSub RoS</title>
+  <link rel="stylesheet" href="/assets/remna.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">R</span><span>RemnaSub <b>RoS</b></span></div>
+      <nav aria-label="Разделы">
+        <button class="nav-item active" data-view="overview">Обзор</button>
+        <button class="nav-item" data-view="subscription">Подписка</button>
+        <button class="nav-item" data-view="listener">Входящий порт</button>
+        <button class="nav-item" data-view="config">Конфигурация</button>
+      </nav>
+      <div class="sidebar-note">Полный YAML-профиль Remnawave с локальными настройками контейнера.</div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div><p class="eyebrow">Mihomo profile runtime</p><h1 id="view-title">Обзор</h1></div>
+        <div class="runtime-status" id="runtime-status" aria-live="polite"><i></i><span>Проверяю состояние</span></div>
+      </header>
+
+      <section class="view active" id="overview">
+        <div class="overview-grid">
+          <article class="status-panel">
+            <p class="section-kicker">Состояние</p>
+            <h2 id="state-headline">Ожидание профиля</h2>
+            <p id="state-description">Укажите URL полной YAML-подписки. После сохранения контейнер загрузит и проверит её.</p>
+            <dl class="facts">
+              <div><dt>Исходный YAML</dt><dd id="source-state">нет</dd></div>
+              <div><dt>Рабочая конфигурация</dt><dd id="final-state">нет</dd></div>
+              <div><dt>Mihomo</dt><dd id="mihomo-state">не запущен</dd></div>
+            </dl>
+            <p class="error-message hidden" id="error-message"></p>
+          </article>
+          <article class="refresh-panel">
+            <p class="section-kicker">Управление</p>
+            <h2>Обновить профиль</h2>
+            <p>Скачивает YAML заново, применяет локальные listeners и перезапускает Mihomo только при валидной итоговой конфигурации.</p>
+            <button class="button primary" id="refresh-button">Обновить сейчас</button>
+            <pre class="meta" id="profile-meta">Метаданных пока нет.</pre>
+          </article>
+        </div>
+      </section>
+
+      <section class="view" id="subscription">
+        <div class="page-intro"><p class="section-kicker">Источник</p><h2>Подписка Remnawave</h2><p>Подписка используется как полный конфиг Mihomo. Секции из неё сохраняются, а локальный listener управляется ниже отдельно.</p></div>
+        <div class="form-layout">
+          <label class="field full"><span>URL YAML-подписки</span><input id="sub-url" type="url" inputmode="url" placeholder="https://panel.example/sub/..." autocomplete="off"></label>
+          <label class="field full"><span>Дополнительные HTTP-заголовки</span><textarea id="sub-headers" rows="5" spellcheck="false" placeholder="Authorization: Bearer ...&#10;User-Agent: ..."></textarea><small>По одному заголовку в строке. Заголовки хранятся только в локальном профиле контейнера.</small></label>
+          <label class="field"><span>Интервал обновления, сек.</span><input id="sub-refresh" type="number" min="30" max="86400" step="1"></label>
+          <label class="field"><span>Таймаут загрузки, сек.</span><input id="sub-timeout" type="number" min="3" max="120" step="1"></label>
+          <label class="switch-field full"><input id="sub-insecure" type="checkbox"><span class="switch"></span><span><b>Не проверять TLS-сертификат источника</b><small>Оставляйте выключенным, кроме заведомо доверенного источника с нестандартным сертификатом.</small></span></label>
+        </div>
+      </section>
+
+      <section class="view" id="listener">
+        <div class="page-intro"><p class="section-kicker">Локальное переопределение</p><h2>Входящий mixed-порт</h2><p>Эта секция заменяет <code>listeners</code> из подписки. Через неё локальная сеть получает доступ к Mihomo по SOCKS5 и HTTP proxy.</p></div>
+        <div class="form-layout">
+          <label class="switch-field full"><input id="mixed-enabled" type="checkbox"><span class="switch"></span><span><b>Включить mixed listener</b><small>При выключении listeners из подписки будут удалены, чтобы профиль не открывал неизвестные локальные порты.</small></span></label>
+          <label class="field"><span>Имя</span><input id="mixed-name" type="text" maxlength="64" pattern="[A-Za-z0-9_-]+"></label>
+          <label class="field"><span>Порт</span><input id="mixed-port" type="number" min="1" max="65535" step="1"></label>
+          <label class="field"><span>Адрес прослушивания</span><input id="mixed-listen" type="text" spellcheck="false" placeholder="0.0.0.0"></label>
+          <label class="switch-field"><input id="mixed-udp" type="checkbox"><span class="switch"></span><span><b>Поддержка UDP</b><small>Нужна для SOCKS5 UDP ASSOCIATE.</small></span></label>
+          <label class="field full"><span>Пользователи</span><textarea id="mixed-users" rows="5" spellcheck="false" placeholder="username#password"></textarea><small>По одному пользователю в строке, формат <code>логин#пароль</code>. Оставьте пустым для доступа без аутентификации.</small></label>
+        </div>
+      </section>
+
+      <section class="view" id="config">
+        <div class="page-intro"><p class="section-kicker">Диагностика</p><h2>Конфигурация</h2><p>Исходный YAML сохраняется после успешного скачивания. Рабочий YAML показывает результат локальных переопределений.</p></div>
+        <div class="config-tabs" role="tablist"><button class="tab active" data-config="source">Полученный YAML</button><button class="tab" data-config="final">Рабочий YAML</button></div>
+        <pre class="config-view" id="config-view">Загрузка...</pre>
+      </section>
+
+      <footer class="action-bar"><span id="save-state" aria-live="polite"></span><button class="button primary" id="save-button">Сохранить и применить</button></footer>
+    </main>
+  </div>
+  <script src="/assets/remna.js"></script>
+</body>
+</html>

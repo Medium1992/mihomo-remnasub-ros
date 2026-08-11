@@ -1,0 +1,549 @@
+#!/bin/sh
+# POST raw config body, ?kind=awg|openvpn|toml -> mihomo proxy YAML block.
+# Логика портирована из mihomo-proxy-ros (entrypoint.sh): AWG/WireGuard .conf,
+# OpenVPN .ovpn/.conf, TrustTunnel .toml. Выводит элемент(ы) списка proxies,
+# готовые для вставки в секцию `proxies`.
+# Returns: { "ok": bool, "output": "<yaml | сообщение об ошибке>" }
+. /www/cgi-bin/_lib.sh
+. /www/cgi-bin/_guard.sh
+guard_json
+
+log() { echo "$@" >&2; }
+yaml_quote() { sed 's/\\/\\\\/g; s/"/\\"/g; s/.*/"&"/'; }
+# q — строка в кавычках; n — число, и только если это правда целое
+# (int-поле с мусором роняет разбор конфига)
+q() { printf '%s' "${1:-}" | yaml_quote; }
+n() { case "${1:-}" in ''|*[!0-9]*) printf '' ;; *) printf '%s' "$1" ;; esac; }
+
+# предупреждения уходят в вывод YAML-комментариями — видно в панели
+WARN=""
+warn() { WARN="$WARN# ⚠ $1
+"; }
+
+KIND="$(query_get kind)"
+NAME="$(query_get name)"
+NAME="$(printf '%s' "$NAME" | tr -cd 'A-Za-z0-9._ -' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+[ -n "$NAME" ] || NAME="$KIND"
+
+TMPDIR_="/dev/shm"; { [ -d "$TMPDIR_" ] && [ -w "$TMPDIR_" ]; } || TMPDIR_="/tmp"
+PFX="$TMPDIR_/.conv.$$"
+SRC="$PFX.src"
+read_body | sed 's/\r$//' > "$SRC"
+trap 'rm -f "$PFX"*' EXIT
+
+if [ ! -s "$SRC" ]; then
+  send_json "400 Bad Request"; printf '{"ok":false,"output":"пустой ввод"}'; exit 0
+fi
+
+# ─────────────── AWG / WireGuard ───────────────
+parse_awg_config() {
+  local config_file="$1"
+  local awg_name="${2:-$(basename "$config_file" .conf)}"
+
+read_cfg() {
+  local key="$1"
+  grep -iE "^[[:space:]]*${key}[[:space:]]*=[[:space:]]*" "$config_file" 2>/dev/null | \
+    tail -n1 | \
+    sed -E 's/^[[:space:]]*[^=]*=[[:space:]]*//I' | \
+    tr -d '\r\n' | \
+    sed -E 's/^[[:space:]]+|[[:space:]]+$//g'
+}
+
+  local private_key=$(read_cfg "PrivateKey")
+  local address=$(read_cfg "Address")
+  local mtu=$(read_cfg "MTU")
+  local keepalive=$(read_cfg "PersistentKeepalive")
+  # 3.0 разрешает диапазон, mihomo — только int. Берём нижнюю границу:
+  # чаще keepalive = лишний трафик, зато NAT жив.
+  case "$keepalive" in
+    *-*)
+      warn "PersistentKeepalive «$keepalive» — диапазон; взята нижняя граница ${keepalive%%-*} (mihomo принимает одно число)"
+      keepalive="${keepalive%%-*}"
+      ;;
+  esac
+  local workers=$(read_cfg "Workers")
+
+  local jc=$(read_cfg "Jc");         local jmin=$(read_cfg "Jmin");     local jmax=$(read_cfg "Jmax")
+  local s1=$(read_cfg "S1");         local s2=$(read_cfg "S2")
+  local s3=$(read_cfg "S3");         local s4=$(read_cfg "S4")
+  local h1=$(read_cfg "H1");         local h2=$(read_cfg "H2");         local h3=$(read_cfg "H3");         local h4=$(read_cfg "H4")
+  local i1=$(read_cfg "I1");         local i2=$(read_cfg "I2");         local i3=$(read_cfg "I3")
+  local i4=$(read_cfg "I4");         local i5=$(read_cfg "I5")
+  local j1=$(read_cfg "J1");         local j2=$(read_cfg "J2");         local j3=$(read_cfg "J3")
+  local itime=$(read_cfg "ITime")
+
+  # ── AmneziaWG 3.0. Значения кроме ключа могут быть диапазоном "a-b",
+  # поэтому в mihomo это строковые поля.
+  local hp_key=$(read_cfg "HeaderProtectionKey")
+  local content_padding=$(read_cfg "ContentPaddingAddition")
+  local rekey_after=$(read_cfg "RekeyAfterTime")
+  local rekey_timeout=$(read_cfg "RekeyTimeout")
+  local reject_after=$(read_cfg "RejectAfterTime")
+  local keepalive_timeout=$(read_cfg "KeepaliveTimeout")
+  local max_handshakes=$(read_cfg "MaxHandshakeAttempts")
+  # override для 3.0 без v3-параметров: строка AwgVersion = 3 в .conf
+  local awg_version=$(read_cfg "AwgVersion")
+
+  local public_key=$(read_cfg "PublicKey")
+  local psk=$(read_cfg "PresharedKey")
+  local endpoint=$(read_cfg "Endpoint")
+
+  local ip_v4=""
+  local ip_v6=""
+  if [ -n "$address" ]; then
+    OLDIFS=$IFS
+    IFS=','
+    for addr in $address; do
+      addr=$(echo "$addr" | sed 's/[[:space:]]//g')
+      if echo "$addr" | grep -q ':'; then
+        [ -n "$ip_v6" ] && ip_v6="$ip_v6,"
+        ip_v6="${ip_v6}${addr%%/*}"
+      else
+        [ -n "$ip_v4" ] && ip_v4="$ip_v4,"
+        ip_v4="${ip_v4}${addr%%/*}"
+      fi
+    done
+    IFS=$OLDIFS
+  fi
+
+  local server=""
+  local port=""
+  if [ -n "$endpoint" ]; then
+    endpoint=$(echo "$endpoint" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    if echo "$endpoint" | grep -q '\['; then
+      server=$(echo "$endpoint" | sed -E 's@^\[([^]]+)\]:(.*)$@\1@')
+      port=$(echo "$endpoint" | sed -E 's@^\[([^]]+)\]:(.*)$@\2@')
+    else
+      server=$(echo "$endpoint" | cut -d':' -f1)
+      port=$(echo "$endpoint" | cut -d':' -f2-)
+    fi
+  fi
+
+  local allowed_ips_raw=$(read_cfg "AllowedIPs")
+  if [ -n "$allowed_ips_raw" ]; then
+    allowed_ips_yaml=$(echo "$allowed_ips_raw" | tr ',' '\n' | \
+      sed -E 's/^[[:space:]]*([0-9a-fA-F\.:\/-]+)[[:space:]]*$/\1/' | \
+      grep -v '^$' | grep -E '^[0-9a-fA-F\.:]+/[0-9]+$' | \
+      sed 's/.*/"&"/' | paste -sd, -)
+    [ -z "$allowed_ips_yaml" ] && allowed_ips_yaml='"0.0.0.0/0", "::/0"'
+  else
+    allowed_ips_yaml='"0.0.0.0/0", "::/0"'
+  fi
+
+  # v3-реализация включается только version: 3; иначе legacy (1.5/2.0)
+  local awg3=0
+  for v in "$hp_key" "$content_padding" "$rekey_after" "$rekey_timeout" \
+           "$reject_after" "$keepalive_timeout" "$max_handshakes"; do
+    [ -n "$v" ] && awg3=1
+  done
+  case "$awg_version" in
+    3|3.*) awg3=1 ;;
+    "") ;;
+    *) awg3=0 ;;
+  esac
+
+  if [ "$awg3" -eq 1 ]; then
+    # J1-J3/ITime вырезаны из 3.0, а UAPI роняет peer на неизвестном ключе
+    if [ -n "$j1$j2$j3$itime" ]; then
+      warn "AmneziaWG 3.0: параметры J1-J3/ITime из 1.5 удалены — выброшены (иначе peer не поднимется)"
+      j1=""; j2=""; j3=""; itime=""
+    fi
+    # S1-S4 идут как nonce для header protection: ядро требует >= 12
+    if [ -n "$hp_key" ]; then
+      for v in s1 s2 s3 s4; do
+        eval val=\$$v
+        # отсутствующий S* не предупреждение: ядро возьмёт его дефолт
+        [ -n "$val" ] || continue
+        case "$val" in *[!0-9]*) val=0 ;; esac
+        if [ "$val" -lt 12 ]; then
+          warn "$v=$val: при HeaderProtectionKey ядро требует S1-S4 >= 12, иначе peer не стартует"
+        fi
+      done
+    fi
+  fi
+
+  printf '%s' "$WARN"
+  printf '  - name: %s\n' "$(q "$awg_name")"
+  echo "    type: wireguard"
+  [ -n "$private_key" ] && printf '    private-key: %s\n' "$(q "$private_key")"
+  [ -n "$server" ] && printf '    server: %s\n' "$(q "$server")"
+  [ -n "$(n "$port")" ] && echo "    port: $(n "$port")"
+  [ -n "$ip_v4" ] && printf '    ip: %s\n' "$(q "$ip_v4")"
+  [ -n "$ip_v6" ] && printf '    ipv6: %s\n' "$(q "$ip_v6")"
+  [ -n "$public_key" ] && printf '    public-key: %s\n' "$(q "$public_key")"
+  [ -n "$psk" ] && printf '    pre-shared-key: %s\n' "$(q "$psk")"
+  [ -n "$(n "$keepalive")" ] && echo "    persistent-keepalive: $(n "$keepalive")"
+  [ -n "$(n "$mtu")" ] && echo "    mtu: $(n "$mtu")"
+  local dialer_proxy_raw=$(read_cfg "DialerProxy")
+  if [ -n "$dialer_proxy_raw" ]; then
+    local dialer_proxy_clean=$(echo "$dialer_proxy_raw" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s/^["'\'']|["'\'']$//g')
+    [ -n "$dialer_proxy_clean" ] && printf '    dialer-proxy: %s\n' "$(q "$dialer_proxy_clean")"
+  fi
+  [ -n "$(n "$workers")" ] && echo "    workers: $(n "$workers")"
+
+  local reserved_raw=$(read_cfg "Reserved")
+  if [ -n "$reserved_raw" ]; then
+    local reserved_clean=$(echo "$reserved_raw" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s/^["'\'']|["'\'']$//g')
+    if [ -n "$reserved_clean" ]; then
+      if echo "$reserved_clean" | grep -q ','; then
+        echo "    reserved: [$reserved_clean]"
+      else
+        echo "    reserved: \"$reserved_clean\""
+      fi
+    fi
+  fi
+
+  echo "    allowed-ips: [$allowed_ips_yaml]"
+  echo "    udp: true"
+  echo "    ip-stack:"
+  echo "      mode: mips"
+  echo "      congestion-controller: bbr3"
+  local dns_raw=$(read_cfg "DNS")
+  if [ -n "$dns_raw" ] && ! echo "$dns_raw" | grep -q '\$'; then
+    local dns_list=$(echo "$dns_raw" | tr ',' '\n' | \
+      sed -E 's/^[[:space:]]+|[[:space:]]+$//g' | \
+      grep -v '^$' | sed 's/.*/"&"/' | paste -sd, -)
+    echo "    dns: [$dns_list]"
+  fi
+  local remote_resolve_raw=$(read_cfg "RemoteDnsResolve")
+  case "$(printf '%s' "$remote_resolve_raw" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) echo "    remote-dns-resolve: true" ;;
+    0|false|no|off) echo "    remote-dns-resolve: false" ;;
+  esac
+
+  local awg_params="jc jmin jmax s1 s2 s3 s4 h1 h2 h3 h4 i1 i2 i3 i4 i5 j1 j2 j3 itime"
+  awg_params="$awg_params hp_key content_padding rekey_after rekey_timeout"
+  awg_params="$awg_params reject_after keepalive_timeout max_handshakes"
+  local has_awg_param=0
+  for v in i1 i2 i3 i4 i5; do
+    eval val=\$$v
+    case "$val" in
+      \<*\>) ;;
+      *) eval "$v=" ;;
+    esac
+  done
+  for v in $awg_params; do
+    eval val=\$$v
+    [ -n "$val" ] && has_awg_param=1
+  done
+
+  if [ "$has_awg_param" -eq 1 ]; then
+    echo "    amnezia-wg-option:"
+    # jc/jmin/jmax/s*/h*/j*/itime — int; i1-i5 — строки-шаблоны пакетов
+    for v in jc jmin jmax s1 s2 s3 s4 h1 h2 h3 h4; do
+      eval val=\$$v
+      [ -n "$(n "$val")" ] && echo "      $v: $(n "$val")"
+    done
+    for v in i1 i2 i3 i4 i5; do
+      eval val=\$$v
+      [ -n "$val" ] && printf '      %s: %s\n' "$v" "$(q "$val")"
+    done
+    for v in j1 j2 j3 itime; do
+      eval val=\$$v
+      [ -n "$(n "$val")" ] && echo "      $v: $(n "$val")"
+    done
+    if [ "$awg3" -eq 1 ]; then
+      echo "      version: 3"
+      # кавычим: иначе YAML отдал бы 22-30 строкой, а 30 — числом
+      [ -n "$hp_key" ]            && printf '      header-protection-key: %s\n'   "$(q "$hp_key")"
+      [ -n "$content_padding" ]   && printf '      content-padding-addition: %s\n' "$(q "$content_padding")"
+      [ -n "$rekey_after" ]       && printf '      rekey-after-time: %s\n'         "$(q "$rekey_after")"
+      [ -n "$rekey_timeout" ]     && printf '      rekey-timeout: %s\n'            "$(q "$rekey_timeout")"
+      [ -n "$reject_after" ]      && printf '      reject-after-time: %s\n'        "$(q "$reject_after")"
+      [ -n "$keepalive_timeout" ] && printf '      keepalive-timeout: %s\n'        "$(q "$keepalive_timeout")"
+      [ -n "$max_handshakes" ]    && printf '      max-handshake-attempts: %s\n'   "$(q "$max_handshakes")"
+    fi
+  fi
+}
+
+# ─────────────── OpenVPN ───────────────
+ovpn_directive_value() {
+  local file="$1"; local key="$2"; local field_index="${3:-1}"
+  awk -v key="$key" -v field_index="$field_index" '
+    function strip_quotes(s) {
+      gsub(/^"/, "", s); gsub(/"$/, "", s)
+      gsub(/^'\''/, "", s); gsub(/'\''$/, "", s)
+      return s
+    }
+    /^[[:space:]]*($|#|;)/ { next }
+    {
+      line = $0; sub(/\r$/, "", line); sub(/^[[:space:]]+/, "", line)
+      n = split(line, parts, /[[:space:]]+/)
+      if (parts[1] == key && field_index <= n) { print strip_quotes(parts[field_index]); exit }
+    }
+  ' "$file"
+}
+ovpn_extract_block() {
+  local file="$1"; local tag="$2"; local out_file="$3"
+  awk -v tag="$tag" '
+    BEGIN { start = "<" tag ">"; stop = "</" tag ">" }
+    {
+      line = $0; sub(/\r$/, "", line)
+      if (line == stop) { in_block = 0; exit }
+      if (in_block) { print line }
+      if (line == start) { in_block = 1 }
+    }
+  ' "$file" > "$out_file"
+  [ -s "$out_file" ]
+}
+ovpn_extract_pem_block() {
+  local file="$1"; local tag="$2"; local out_file="$3"; local raw_file="${out_file}.raw"
+  ovpn_extract_block "$file" "$tag" "$raw_file" || return 1
+  awk '
+    /^-----BEGIN / { in_pem = 1 }
+    in_pem { print }
+    /^-----END / { exit }
+  ' "$raw_file" > "$out_file"
+  rm -f "$raw_file"
+  [ -s "$out_file" ]
+}
+emit_yaml_block_file() {
+  local key="$1"; local file="$2"
+  [ -s "$file" ] || return 1
+  echo "    $key: |"
+  sed 's/^/      /' "$file"
+}
+emit_vpn_openvpn_proxy() {
+  local ovpn_file="$1"; local name="$2"; local tmp_prefix="$3"
+  local server="" port="" proto="" dev="" cipher="" data_ciphers="" data_ciphers_fallback="" auth="" mtu="" username="" password="" comp_lzo="" key_direction="" ping="" ping_restart=""
+  local ca_file cert_file key_file tls_auth_file tls_crypt_file tls_crypt_v2_file auth_user_file tls_source="" cipher_item="" data_ciphers_yaml=""
+
+  grep -q '^[[:space:]]*remote[[:space:]]' "$ovpn_file" 2>/dev/null || return 1
+  grep -q '^[[:space:]]*<ca>[[:space:]]*$' "$ovpn_file" 2>/dev/null || return 1
+
+  server=$(ovpn_directive_value "$ovpn_file" "remote" 2)
+  port=$(ovpn_directive_value "$ovpn_file" "remote" 3)
+  proto=$(ovpn_directive_value "$ovpn_file" "proto" 2)
+  [ -n "$proto" ] || proto=$(ovpn_directive_value "$ovpn_file" "remote" 4)
+  dev=$(ovpn_directive_value "$ovpn_file" "dev" 2)
+  cipher=$(ovpn_directive_value "$ovpn_file" "cipher" 2)
+  data_ciphers=$(ovpn_directive_value "$ovpn_file" "data-ciphers" 2)
+  data_ciphers_fallback=$(ovpn_directive_value "$ovpn_file" "data-ciphers-fallback" 2)
+  auth=$(ovpn_directive_value "$ovpn_file" "auth" 2)
+  comp_lzo=$(ovpn_directive_value "$ovpn_file" "comp-lzo" 2)
+  mtu=$(ovpn_directive_value "$ovpn_file" "tun-mtu" 2)
+  [ -n "$mtu" ] || mtu=$(ovpn_directive_value "$ovpn_file" "mtu" 2)
+  key_direction=$(ovpn_directive_value "$ovpn_file" "key-direction" 2)
+  [ -n "$key_direction" ] || key_direction=$(ovpn_directive_value "$ovpn_file" "tls-auth" 3)
+  ping=$(ovpn_directive_value "$ovpn_file" "ping" 2)
+  ping_restart=$(ovpn_directive_value "$ovpn_file" "ping-restart" 2)
+
+  [ -n "$server" ] || return 1
+  [ -n "$port" ] || port=1194
+  case "$proto" in
+    tcp-client|tcp-server|tcp4|tcp6) proto="tcp" ;;
+    udp4|udp6) proto="udp" ;;
+  esac
+  case "$proto" in
+    tcp|udp) ;;
+    *) proto="udp" ;;
+  esac
+  [ -n "$dev" ] || dev="tun"
+  auth=$(printf '%s' "$auth" | tr '[:lower:]' '[:upper:]')
+  [ "$auth" = "SHA-1" ] && auth="SHA1"
+  [ -n "$auth" ] || auth="SHA256"
+
+  if [ -n "$cipher" ]; then
+    for cipher_item in $(printf '%s' "$cipher" | tr ':,' '  '); do
+      cipher_item=$(printf '%s' "$cipher_item" | tr '[:lower:]' '[:upper:]')
+      [ "$cipher_item" = "AES-CBC" ] && cipher_item="AES-128-CBC"
+      case "$cipher_item" in
+        AES-128-GCM|AES-192-GCM|AES-256-GCM|AES-128-CBC|AES-192-CBC|AES-256-CBC|CHACHA20-POLY1305)
+          cipher="$cipher_item"; break ;;
+      esac
+    done
+  fi
+  case "$key_direction" in 0|1) ;; *) key_direction="" ;; esac
+  case "$ping" in *[!0-9]*|'') ping="" ;; esac
+  case "$ping_restart" in *[!0-9]*|'') ping_restart="" ;; esac
+  if [ -n "$data_ciphers" ]; then
+    for cipher_item in $(printf '%s' "$data_ciphers" | tr ':,' '  '); do
+      cipher_item=$(printf '%s' "$cipher_item" | tr '[:lower:]' '[:upper:]')
+      [ "$cipher_item" = "AES-CBC" ] && cipher_item="AES-128-CBC"
+      case "$cipher_item" in
+        AES-128-GCM|AES-192-GCM|AES-256-GCM|AES-128-CBC|AES-192-CBC|AES-256-CBC|CHACHA20-POLY1305)
+          [ -n "$data_ciphers_yaml" ] && data_ciphers_yaml="$data_ciphers_yaml, "
+          data_ciphers_yaml="$data_ciphers_yaml\"$cipher_item\""
+          ;;
+      esac
+    done
+  fi
+  if [ -n "$data_ciphers_fallback" ]; then
+    data_ciphers_fallback=$(printf '%s' "$data_ciphers_fallback" | tr '[:lower:]' '[:upper:]')
+    [ "$data_ciphers_fallback" = "AES-CBC" ] && data_ciphers_fallback="AES-128-CBC"
+    case "$data_ciphers_fallback" in
+      AES-128-GCM|AES-192-GCM|AES-256-GCM|AES-128-CBC|AES-192-CBC|AES-256-CBC|CHACHA20-POLY1305) ;;
+      *) data_ciphers_fallback="" ;;
+    esac
+  fi
+  comp_lzo=$(printf '%s' "$comp_lzo" | tr '[:upper:]' '[:lower:]')
+
+  ca_file="${tmp_prefix}.ca"
+  cert_file="${tmp_prefix}.cert"
+  key_file="${tmp_prefix}.key"
+  tls_auth_file="${tmp_prefix}.tls-auth"
+  tls_crypt_file="${tmp_prefix}.tls-crypt"
+  tls_crypt_v2_file="${tmp_prefix}.tls-crypt-v2"
+  auth_user_file="${tmp_prefix}.auth_user"
+
+  ovpn_extract_pem_block "$ovpn_file" "ca" "$ca_file" || return 1
+  ovpn_extract_pem_block "$ovpn_file" "cert" "$cert_file" || true
+  ovpn_extract_pem_block "$ovpn_file" "key" "$key_file" || true
+  if ovpn_extract_pem_block "$ovpn_file" "tls-crypt-v2" "$tls_crypt_v2_file"; then
+    tls_source="tls-crypt-v2"
+  elif ovpn_extract_pem_block "$ovpn_file" "tls-crypt" "$tls_crypt_file"; then
+    tls_source="tls-crypt"
+  elif ovpn_extract_pem_block "$ovpn_file" "tls-auth" "$tls_auth_file"; then
+    tls_source="tls-auth"
+  fi
+
+  if ovpn_extract_block "$ovpn_file" "auth-user-pass" "$auth_user_file"; then
+    username=$(sed -n '1p' "$auth_user_file")
+    password=$(sed -n '2p' "$auth_user_file")
+  fi
+
+  if [ ! -s "$cert_file" ] || [ ! -s "$key_file" ]; then
+    [ -n "$username" ] || return 1
+    [ -n "$password" ] || return 1
+  fi
+
+  printf '  - name: %s\n' "$(q "$name")"
+  echo "    type: openvpn"
+  printf '    server: %s\n' "$(q "$server")"
+  echo "    port: $(n "$port")"
+  echo "    proto: $proto"
+  [ -n "$username" ] && printf '    username: %s\n' "$(q "$username")"
+  [ -n "$password" ] && printf '    password: %s\n' "$(q "$password")"
+  emit_yaml_block_file "ca" "$ca_file"
+  [ -s "$cert_file" ] && emit_yaml_block_file "cert" "$cert_file"
+  [ -s "$key_file" ] && emit_yaml_block_file "key" "$key_file"
+  [ -s "$tls_auth_file" ] && emit_yaml_block_file "tls-auth" "$tls_auth_file"
+  [ "$tls_source" = "tls-auth" ] && [ -n "$key_direction" ] && echo "    key-direction: $key_direction"
+  [ -s "$tls_crypt_file" ] && emit_yaml_block_file "tls-crypt" "$tls_crypt_file"
+  [ -s "$tls_crypt_v2_file" ] && emit_yaml_block_file "tls-crypt-v2" "$tls_crypt_v2_file"
+  echo "    dev: $dev"
+  case "$cipher" in
+    AES-128-GCM|AES-192-GCM|AES-256-GCM|AES-128-CBC|AES-192-CBC|AES-256-CBC|CHACHA20-POLY1305) echo "    cipher: $cipher" ;;
+  esac
+  [ -n "$data_ciphers_yaml" ] && echo "    data-ciphers: [$data_ciphers_yaml]"
+  [ -n "$data_ciphers_fallback" ] && echo "    data-ciphers-fallback: $data_ciphers_fallback"
+  case "$auth" in
+    MD5|SHA1|SHA256|SHA384|SHA512) echo "    auth: $auth" ;;
+  esac
+  case "$comp_lzo" in
+    yes|no|adaptive) echo "    comp-lzo: \"$comp_lzo\"" ;;
+  esac
+  [ -n "$(n "$mtu")" ] && echo "    mtu: $(n "$mtu")"
+  [ "$proto" = "udp" ] && echo "    udp: true"
+  [ -n "$ping" ] && echo "    ping: $ping"
+  [ -n "$ping_restart" ] && echo "    ping-restart: $ping_restart"
+  echo "    ip-stack:"
+  echo "      mode: mips"
+  echo "      congestion-controller: bbr3"
+  return 0
+}
+
+# ─────────────── TrustTunnel (.toml) ───────────────
+toml_string_value() {
+  local file="$1"; local key="$2"
+  awk -v key="$key" '
+    /^[[:space:]]*($|#)/ { next }
+    {
+      line = $0; sub(/\r$/, "", line)
+      if (line !~ "^[[:space:]]*" key "[[:space:]]*=") next
+      sub(/^[^=]*=[[:space:]]*/, "", line)
+      if (line ~ /^"""/) next
+      if (line ~ /^"/) { sub(/^"/, "", line); sub(/"[[:space:]]*(#.*)?$/, "", line); print line; exit }
+      sub(/[[:space:]]*(#.*)?$/, "", line); print line; exit
+    }
+  ' "$file"
+}
+toml_bool_value() { toml_string_value "$1" "$2" | tr '[:upper:]' '[:lower:]'; }
+toml_first_array_string() {
+  local file="$1"; local key="$2"
+  awk -v key="$key" '
+    /^[[:space:]]*($|#)/ { next }
+    {
+      line = $0; sub(/\r$/, "", line)
+      if (line !~ "^[[:space:]]*" key "[[:space:]]*=") next
+      sub(/^[^=]*=[[:space:]]*/, "", line)
+      if (match(line, /"[^"]+"/)) { out = substr(line, RSTART + 1, RLENGTH - 2); print out; exit }
+    }
+  ' "$file"
+}
+split_host_port() {
+  local addr="$1"; local host_file="$2"; local port_file="$3"; local host="" port=""
+  case "$addr" in
+    \[*\]:*) host="${addr%%]:*}"; host="${host#[}"; port="${addr##*:}" ;;
+    *:*) host="${addr%:*}"; port="${addr##*:}" ;;
+    *) host="$addr"; port="" ;;
+  esac
+  printf '%s' "$host" > "$host_file"
+  printf '%s' "$port" > "$port_file"
+}
+emit_trusttunnel_proxy() {
+  local toml_file="$1"; local name="$2"; local tmp_prefix="$3"
+  local hostname="" address="" server="" port="" username="" password="" skip_verify="" protocol="" custom_sni=""
+  local host_file="${tmp_prefix}.host"; local port_file="${tmp_prefix}.port"
+
+  hostname=$(toml_string_value "$toml_file" "hostname")
+  address=$(toml_first_array_string "$toml_file" "addresses")
+  username=$(toml_string_value "$toml_file" "username")
+  password=$(toml_string_value "$toml_file" "password")
+  custom_sni=$(toml_string_value "$toml_file" "custom_sni")
+  skip_verify=$(toml_bool_value "$toml_file" "skip_verification")
+  protocol=$(toml_string_value "$toml_file" "upstream_protocol" | tr '[:upper:]' '[:lower:]')
+
+  [ -n "$address" ] || address="$hostname:443"
+  split_host_port "$address" "$host_file" "$port_file"
+  server=$(cat "$host_file" 2>/dev/null)
+  port=$(cat "$port_file" 2>/dev/null)
+  [ -n "$server" ] || server="$hostname"
+  [ -n "$port" ] || port="443"
+
+  [ -n "$server" ] || return 1
+  [ -n "$username" ] || return 1
+  [ -n "$password" ] || return 1
+
+  printf '  - name: %s\n' "$(q "$name")"
+  echo "    type: trusttunnel"
+  printf '    server: %s\n' "$(q "$server")"
+  echo "    port: $(n "$port")"
+  printf '    username: %s\n' "$(q "$username")"
+  printf '    password: %s\n' "$(q "$password")"
+  if [ -n "$custom_sni" ]; then
+    printf '    sni: %s\n' "$(q "$custom_sni")"
+  elif [ -n "$hostname" ] && [ "$hostname" != "$server" ]; then
+    printf '    sni: %s\n' "$(q "$hostname")"
+  fi
+  [ "$skip_verify" = "true" ] && echo "    skip-cert-verify: true"
+  if [ "$protocol" = "http3" ]; then
+    echo "    quic: true"
+    echo "    congestion-controller: bbr"
+  fi
+  echo "    health-check: true"
+  echo "    udp: true"
+}
+
+OUT=""; RC=0
+case "$KIND" in
+  awg)
+    OUT="$(parse_awg_config "$SRC" "$NAME")"
+    case "$OUT" in *private-key*|*public-key*|*server:*) ;; *) OUT="" ;; esac ;;
+  openvpn)
+    OUT="$(emit_vpn_openvpn_proxy "$SRC" "$NAME" "$PFX")"; RC=$? ;;
+  toml)
+    OUT="$(emit_trusttunnel_proxy "$SRC" "$NAME" "$PFX")"; RC=$? ;;
+  *)
+    send_json "400 Bad Request"; printf '{"ok":false,"output":"unknown kind"}'; exit 0 ;;
+esac
+
+if [ "$RC" -ne 0 ] || [ -z "$OUT" ]; then
+  MSG="Не удалось распознать конфиг как «$KIND». Проверьте, что вставлен корректный $KIND-конфиг."
+  send_json "200 OK"
+  printf '{"ok":false,"output":"%s"}' "$(printf '%s' "$MSG" | json_escape)"
+  exit 0
+fi
+
+send_json "200 OK"
+printf '{"ok":true,"output":"%s"}' "$(printf '%s' "$OUT" | json_escape)"

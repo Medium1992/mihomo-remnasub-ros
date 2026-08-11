@@ -1,0 +1,69 @@
+#!/bin/sh
+. /www/cgi-bin/_remna.sh
+
+if [ "${REQUEST_METHOD:-GET}" = GET ]; then
+  json_headers
+  printf '{"ok":true,"profile":{'
+  printf '"url_b64":"%s",' "$(state_get SUB_URL_B64)"
+  printf '"headers_b64":"%s",' "$(state_get SUB_HEADERS_B64)"
+  printf '"refresh_seconds":%s,' "$(state_get SUB_REFRESH_SECONDS 3600)"
+  printf '"timeout_seconds":%s,' "$(state_get SUB_TIMEOUT_SECONDS 30)"
+  printf '"insecure_tls":%s,' "$(state_get SUB_INSECURE_TLS 0)"
+  printf '"mixed_enabled":%s,' "$(state_get MIXED_ENABLED 1)"
+  printf '"mixed_name_b64":"%s",' "$(b64 "$(state_get MIXED_NAME mixed-in)")"
+  printf '"mixed_port":%s,' "$(state_get MIXED_PORT 7890)"
+  printf '"mixed_listen_b64":"%s",' "$(b64 "$(state_get MIXED_LISTEN 0.0.0.0)")"
+  printf '"mixed_udp":%s,' "$(state_get MIXED_UDP 1)"
+  printf '"mixed_users_b64":"%s"' "$(state_get MIXED_USERS_B64)"
+  printf '}}\n'
+  exit 0
+fi
+
+require_post
+load_form
+url=$(form_value url)
+headers=$(form_value headers)
+refresh=$(form_value refresh_seconds)
+timeout=$(form_value timeout_seconds)
+insecure=$(form_value insecure_tls)
+mixed_enabled=$(form_value mixed_enabled)
+mixed_name=$(form_value mixed_name)
+mixed_port=$(form_value mixed_port)
+mixed_listen=$(form_value mixed_listen)
+mixed_udp=$(form_value mixed_udp)
+mixed_users=$(form_value mixed_users)
+
+case "$url" in ''|http://*|https://*) ;; *) deny 'URL must use http(s)' ;; esac
+valid_number "$refresh" && [ "$refresh" -ge 30 ] && [ "$refresh" -le 86400 ] || deny 'Refresh interval must be 30..86400 seconds'
+valid_number "$timeout" && [ "$timeout" -ge 3 ] && [ "$timeout" -le 120 ] || deny 'Timeout must be 3..120 seconds'
+case "$insecure" in 0|1) ;; *) insecure=0 ;; esac
+case "$mixed_enabled" in 0|1) ;; *) mixed_enabled=0 ;; esac
+case "$mixed_udp" in 0|1) ;; *) mixed_udp=0 ;; esac
+mixed_name=$(printf '%s' "$mixed_name" | tr -cd 'A-Za-z0-9_-')
+[ -n "$mixed_name" ] || mixed_name=mixed-in
+valid_number "$mixed_port" && [ "$mixed_port" -ge 1 ] && [ "$mixed_port" -le 65535 ] || deny 'Listener port must be 1..65535'
+case "$mixed_listen" in *[!0-9A-Fa-f:.]*|'') deny 'Listener address is invalid' ;; esac
+clean_headers=$(printf '%s' "$headers" | tr -d '\r')
+[ "$clean_headers" = "$headers" ] || deny 'Headers must not contain CR'
+mixed_users=$(printf '%s' "$mixed_users" | tr -d '\r')
+
+tmp="$PROFILE.tmp.$$"
+umask 077
+cat > "$tmp" <<EOF
+PROFILE_VERSION=1
+SUB_URL_B64=$(b64 "$url")
+SUB_HEADERS_B64=$(b64 "$headers")
+SUB_REFRESH_SECONDS=$refresh
+SUB_TIMEOUT_SECONDS=$timeout
+SUB_INSECURE_TLS=$insecure
+MIXED_ENABLED=$mixed_enabled
+MIXED_NAME=$mixed_name
+MIXED_PORT=$mixed_port
+MIXED_LISTEN=$mixed_listen
+MIXED_UDP=$mixed_udp
+MIXED_USERS_B64=$(b64 "$mixed_users")
+EOF
+mv "$tmp" "$PROFILE"
+kill -USR1 1 2>/dev/null || true
+json_headers
+printf '{"ok":true,"reload":true}\n'
