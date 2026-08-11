@@ -1,0 +1,6 @@
+#!/bin/sh
+. /www/cgi-bin/_remna.sh
+require_post
+kill -USR1 1 2>/dev/null || true
+json_headers
+printf '{"ok":true,"reload":true}\n'

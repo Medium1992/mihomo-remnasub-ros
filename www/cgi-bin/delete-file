@@ -1,0 +1,15 @@
+#!/bin/sh
+# POST ?dir=<key>&name=<file> -> delete
+. /www/cgi-bin/_lib.sh
+. /www/cgi-bin/_guard.sh
+guard_json
+
+path="$(res_path "$(query_get dir)" "$(query_get name)")" || {
+  send_json "400 Bad Request"; printf '{"ok":false,"output":"bad request"}'; exit 0; }
+
+if [ -f "$path" ]; then
+  rm -f "$path"
+  send_json "200 OK"; printf '{"ok":true,"output":"deleted"}'
+else
+  send_json "404 Not Found"; printf '{"ok":false,"output":"not found"}'
+fi
