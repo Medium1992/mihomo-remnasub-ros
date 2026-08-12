@@ -96,6 +96,24 @@ valid_port_block() {
   '
 }
 
+decode_b64_value() {
+  [ -n "${1:-}" ] || return 0
+  printf '%s' "$1" | openssl base64 -d -A 2>/dev/null
+}
+
+canonical_ports() {
+  printf '%s' "${1:-}" | tr ',' '\n' | awk '
+    function trim(value) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); return value }
+    {
+      value=trim($0)
+      if (value == "") next
+      if (result != "") result=result ","
+      result=result value
+    }
+    END { printf "%s", result }
+  '
+}
+
 profiles_json() {
   first=1
   for file in "$PROFILES_DIR"/p-*.conf; do
@@ -109,14 +127,29 @@ profiles_json() {
     source_present=false
     final_present=false
     updated_at=0
+    final_updated_at=0
     [ -s "$profile_source" ] && source_present=true
     [ -s "$profile_final" ] && final_present=true
     if [ -f "$profile_source" ]; then
       updated_at=$(stat -c '%Y' "$profile_source" 2>/dev/null || printf '0')
     fi
+    if [ -f "$profile_final" ]; then
+      final_updated_at=$(stat -c '%Y' "$profile_final" 2>/dev/null || printf '0')
+    fi
+    refresh_state=$(profile_status_get "$id" STATE idle)
+    refresh_stage=$(profile_status_get "$id" STAGE idle)
+    refresh_action=$(profile_status_get "$id" ACTION)
+    [ -f "$JOBS_DIR/$id.request" ] && refresh_state=queued refresh_stage=queued
+    refresh_http_status=$(profile_status_get "$id" HTTP_STATUS)
+    refresh_bytes=$(profile_status_get "$id" BYTES 0)
+    refresh_started=$(profile_status_get "$id" STARTED_EPOCH 0)
+    refresh_finished=$(profile_status_get "$id" FINISHED_EPOCH 0)
+    valid_number "$refresh_bytes" || refresh_bytes=0
+    valid_number "$refresh_started" || refresh_started=0
+    valid_number "$refresh_finished" || refresh_finished=0
     [ "$first" = 1 ] || printf ','
     first=0
-    printf '{"id":"%s","name_b64":"%s","display_name_b64":"%s","url_b64":"%s","refresh_seconds":%s,"effective_refresh_seconds":%s,"local_override_enabled":%s,"source_present":%s,"final_present":%s,"updated_at":%s,"error_b64":"%s"}' \
+    printf '{"id":"%s","name_b64":"%s","display_name_b64":"%s","url_b64":"%s","refresh_seconds":%s,"effective_refresh_seconds":%s,"local_override_enabled":%s,"source_present":%s,"final_present":%s,"updated_at":%s,"final_updated_at":%s,"configuration_valid":"%s","refresh_state":"%s","refresh_stage":"%s","refresh_action":"%s","refresh_http_status":"%s","refresh_http_line_b64":"%s","refresh_bytes":%s,"refresh_started_at":%s,"refresh_finished_at":%s,"refresh_message_b64":"%s","refresh_validation_b64":"%s","error_b64":"%s"}' \
       "$id" \
       "$(state_file_get "$file" NAME_B64 "$(b64 "$id")")" \
       "$(profile_effective_name_b64 "$file" "$profile_meta")" \
@@ -127,6 +160,18 @@ profiles_json() {
       "$source_present" \
       "$final_present" \
       "$updated_at" \
+      "$final_updated_at" \
+      "$(profile_meta_get "$profile_meta" configuration_valid unknown)" \
+      "$refresh_state" \
+      "$refresh_stage" \
+      "$refresh_action" \
+      "$refresh_http_status" \
+      "$(profile_status_get "$id" HTTP_STATUS_LINE_B64)" \
+      "$refresh_bytes" \
+      "$refresh_started" \
+      "$refresh_finished" \
+      "$(profile_status_get "$id" MESSAGE_B64)" \
+      "$(profile_status_get "$id" VALIDATION_B64)" \
       "$(b64 "$(cat "$profile_error" 2>/dev/null || true)")"
   done
 }
@@ -328,6 +373,11 @@ if [ "${REQUEST_METHOD:-GET}" = GET ]; then
   printf '"source_present":%s,' "$view_source_present"
   printf '"final_present":%s,' "$view_final_present"
   printf '"updated_at":%s,' "$view_updated_at"
+  printf '"final_updated_at":%s,' "$(stat -c '%Y' "$view_final" 2>/dev/null || printf '0')"
+  printf '"configuration_valid":"%s",' "$(profile_meta_get "$view_meta" configuration_valid unknown)"
+  printf '"http_status":"%s",' "$(profile_meta_get "$view_meta" http_status)"
+  printf '"http_status_line_b64":"%s",' "$(profile_meta_get "$view_meta" http_status_line_b64)"
+  printf '"validation_b64":"%s",' "$(profile_meta_get "$view_meta" validation_b64)"
   printf '"error_b64":"%s"' "$(b64 "$(cat "$view_error" 2>/dev/null || true)")"
   printf '}}\n'
   exit 0
@@ -348,7 +398,17 @@ case "$action" in
       run_enabled=0
     fi
     write_state "$active_id" "$run_enabled"
-    kill -USR1 1 2>/dev/null || true
+    if [ "$action" = start ]; then
+      if [ -s "$RUNTIME_DIR/$active_id.config.yaml" ]; then
+        kill -HUP 1 2>/dev/null || true
+      elif [ -s "$PROFILES_DIR/$active_id.source.yaml" ]; then
+        queue_profile_job "$active_id" rebuild "runtime start"
+      else
+        queue_profile_job "$active_id" fetch "runtime start"
+      fi
+    else
+      kill -HUP 1 2>/dev/null || true
+    fi
     json_headers
     printf '{"ok":true,"action":"%s"}\n' "$action"
     exit 0
@@ -357,8 +417,15 @@ case "$action" in
     target_id=$(form_value profile_id)
     profile_path=$(profile_file "$target_id") || deny 'invalid profile id'
     [ -f "$profile_path" ] || deny 'profile not found'
-    write_state "$target_id" "$(state_file_get "$STATE" RUN_ENABLED 0)"
-    kill -USR1 1 2>/dev/null || true
+    selected_run=$(state_file_get "$STATE" RUN_ENABLED 0)
+    write_state "$target_id" "$selected_run"
+    if [ -s "$RUNTIME_DIR/$target_id.config.yaml" ]; then
+      [ "$selected_run" = 1 ] && kill -HUP 1 2>/dev/null || true
+    elif [ -s "$PROFILES_DIR/$target_id.source.yaml" ]; then
+      queue_profile_job "$target_id" rebuild "profile selected"
+    elif [ -n "$(state_file_get "$profile_path" SUB_URL_B64)" ]; then
+      queue_profile_job "$target_id" fetch "profile selected"
+    fi
     json_headers
     printf '{"ok":true,"selected":"%s"}\n' "$target_id"
     exit 0
@@ -412,7 +479,9 @@ EOF
       "$PROFILES_DIR/$target_id.source.yaml" \
       "$PROFILES_DIR/$target_id.source.meta" \
       "$PROFILES_DIR/$target_id.error.txt" \
-      "$RUNTIME_DIR/$target_id.config.yaml"
+      "$RUNTIME_DIR/$target_id.config.yaml" \
+      "$JOBS_DIR/$target_id.request" \
+      "$STATUS_DIR/$target_id.conf"
     json_headers
     printf '{"ok":true,"deleted":"%s"}\n' "$target_id"
     exit 0
@@ -497,10 +566,25 @@ EOF
     for network_timeout in "$network_ct_established" "$network_ct_syn_sent" "$network_ct_syn_recv" "$network_ct_fin_wait" "$network_ct_close_wait" "$network_ct_last_ack" "$network_ct_time_wait" "$network_ct_close" "$network_ct_unacknowledged" "$network_ct_udp_stream"; do
       valid_number "$network_timeout" && [ "$network_timeout" -ge 1 ] && [ "$network_timeout" -le 604800 ] || deny 'conntrack timeouts must be 1..604800 seconds'
     done
+    old_panel_signature="$(state_file_get "$STATE" EXTERNAL_UI_PRESET zashboard-cdn)|$(state_file_get "$STATE" EXTERNAL_UI_URL_B64)"
+    new_panel_signature="$ui_preset|$(b64 "$ui_url")"
+    old_runtime_signature="$(state_file_get "$STATE" LISTENER_MODE auto)|$(state_file_get "$STATE" REDIR_PORT 12345)|$(state_file_get "$STATE" TPROXY_PORT 12346)|$(state_file_get "$STATE" EXTERNAL_UI_SECRET_B64)|$(state_file_get "$STATE" MIHOMO_FIND_PROCESS_MODE off)|$(state_file_get "$STATE" MIHOMO_LOG_LEVEL warning)|$(state_file_get "$STATE" MIHOMO_IPV6 0)|$(state_file_get "$STATE" MIHOMO_STORE_SELECTED 1)|$(state_file_get "$STATE" MIHOMO_STORE_FAKE_IP 0)|$(state_file_get "$STATE" MIHOMO_SNIFFER_OVERRIDE 0)|$(state_file_get "$STATE" MIHOMO_SNIFFER_ENABLE 0)|$(state_file_get "$STATE" MIHOMO_SNIFFER_FORCE_DNS_MAPPING 0)|$(state_file_get "$STATE" MIHOMO_SNIFFER_PARSE_PURE_IP 0)|$(state_file_get "$STATE" MIHOMO_SNIFFER_OVERRIDE_DESTINATION 0)|$(canonical_ports "$(decode_b64_value "$(state_file_get "$STATE" MIHOMO_SNIFFER_QUIC_PORTS_B64)")")|$(canonical_ports "$(decode_b64_value "$(state_file_get "$STATE" MIHOMO_SNIFFER_TLS_PORTS_B64)")")|$(canonical_ports "$(decode_b64_value "$(state_file_get "$STATE" MIHOMO_SNIFFER_HTTP_PORTS_B64 ODAKODA4MC04ODgw)")")|$(state_file_get "$STATE" MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION 1)|$(state_file_get "$STATE" MIHOMO_SNIFFER_FORCE_DOMAIN_B64)|$(state_file_get "$STATE" MIHOMO_SNIFFER_SKIP_DOMAIN_B64)|$(state_file_get "$STATE" MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64)|$(state_file_get "$STATE" MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64)"
+    new_runtime_signature="$listener_mode|$redir_port|$tproxy_port|$(b64 "$ui_secret")|$mihomo_find_process_mode|$mihomo_log_level|$mihomo_ipv6|$mihomo_store_selected|$mihomo_store_fake_ip|$mihomo_sniffer_override|$mihomo_sniffer_enable|$mihomo_sniffer_force_dns_mapping|$mihomo_sniffer_parse_pure_ip|$mihomo_sniffer_override_destination|$(canonical_ports "$mihomo_sniffer_quic_ports")|$(canonical_ports "$mihomo_sniffer_tls_ports")|$(canonical_ports "$mihomo_sniffer_http_ports")|$mihomo_sniffer_http_override_destination|$(b64 "$mihomo_sniffer_force_domain")|$(b64 "$mihomo_sniffer_skip_domain")|$(b64 "$mihomo_sniffer_skip_src_address")|$(b64 "$mihomo_sniffer_skip_dst_address")"
     write_container_settings
-    kill -USR1 1 2>/dev/null || true
+    panel_update=false
+    core_rebuild=false
+    source_refresh=false
+    if [ "$old_panel_signature" != "$new_panel_signature" ]; then
+      queue_panel_update
+      panel_update=true
+    fi
+    active_id=$(state_file_get "$STATE" ACTIVE_PROFILE_ID "$ACTIVE_PROFILE_ID")
+    if [ "$old_runtime_signature" != "$new_runtime_signature" ] && [ -s "$PROFILES_DIR/$active_id.source.yaml" ]; then
+      queue_profile_job "$active_id" rebuild "global settings changed"
+      core_rebuild=true
+    fi
     json_headers
-    printf '{"ok":true,"action":"save-settings"}\n'
+    printf '{"ok":true,"action":"save-settings","panel_update":%s,"core_rebuild":%s,"source_refresh":%s}\n' "$panel_update" "$core_rebuild" "$source_refresh"
     exit 0
     ;;
 esac
@@ -510,6 +594,8 @@ active_id=$(state_file_get "$STATE" ACTIVE_PROFILE_ID "$ACTIVE_PROFILE_ID")
 [ -n "$target_id" ] || target_id="$active_id"
 target_path=$(profile_file "$target_id") || deny 'invalid profile id'
 [ -f "$target_path" ] || deny 'profile not found'
+old_fetch_signature="$(state_file_get "$target_path" SUB_URL_B64)|$(state_file_get "$target_path" SUB_HEADERS_B64)|$(state_file_get "$target_path" SUB_TIMEOUT_SECONDS 30)|$(state_file_get "$target_path" SUB_INSECURE_TLS 0)"
+old_build_signature="$(profile_local_override_enabled "$target_path")|$(state_file_get "$target_path" LOCAL_OVERRIDE_B64)|$(state_file_get "$target_path" LOCAL_FIND_PROCESS_MODE inherit)|$(state_file_get "$target_path" LOCAL_LOG_LEVEL inherit)|$(state_file_get "$target_path" LOCAL_IPV6 inherit)|$(state_file_get "$target_path" LOCAL_STORE_SELECTED inherit)|$(state_file_get "$target_path" LOCAL_STORE_FAKE_IP inherit)|$(state_file_get "$target_path" LOCAL_SNIFFER_MODE inherit)"
 url=$(form_value url)
 name=$(form_value name)
 headers=$(form_value headers)
@@ -573,6 +659,18 @@ SUB_TIMEOUT_SECONDS=$timeout
 SUB_INSECURE_TLS=$insecure
 EOF
 mv "$tmp" "$target_path"
-[ "$target_id" = "$active_id" ] && kill -USR1 1 2>/dev/null || true
+new_fetch_signature="$(b64 "$url")|$(b64 "$headers")|$timeout|$insecure"
+new_build_signature="$local_override_enabled|$(b64 "$local_override")|$local_find_process_mode|$local_log_level|$local_ipv6|$local_store_selected|$local_store_fake_ip|$local_sniffer_mode"
+queued=false
+queued_action=
+if [ -n "$url" ] && { [ "$old_fetch_signature" != "$new_fetch_signature" ] || [ ! -s "$PROFILES_DIR/$target_id.source.yaml" ]; }; then
+  queue_profile_job "$target_id" fetch "subscription source settings changed"
+  queued=true
+  queued_action=fetch
+elif [ "$old_build_signature" != "$new_build_signature" ] && [ -s "$PROFILES_DIR/$target_id.source.yaml" ]; then
+  queue_profile_job "$target_id" rebuild "subscription overrides changed"
+  queued=true
+  queued_action=rebuild
+fi
 json_headers
-printf '{"ok":true,"reload":true}\n'
+printf '{"ok":true,"queued":%s,"queued_action":"%s"}\n' "$queued" "$queued_action"

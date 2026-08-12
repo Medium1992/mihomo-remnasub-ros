@@ -6,6 +6,13 @@ STATE="$APP_DIR/state.conf"
 PROFILES_DIR="$APP_DIR/profiles"
 RUNTIME_DIR=/dev/shm/remnasub
 UI_DIR=/etc/mihomo/ui
+JOBS_DIR="$RUNTIME_DIR/jobs"
+STATUS_DIR="$RUNTIME_DIR/status"
+EVENT_LOG="$RUNTIME_DIR/events.log"
+UI_STATUS="$RUNTIME_DIR/ui.status"
+UI_REQUEST="$RUNTIME_DIR/ui.request"
+
+mkdir -p "$JOBS_DIR" "$STATUS_DIR"
 
 json_headers() {
   echo 'Content-Type: application/json; charset=utf-8'
@@ -64,6 +71,50 @@ valid_profile_id() {
 profile_file() {
   valid_profile_id "${1:-}" || return 1
   printf '%s/%s.conf' "$PROFILES_DIR" "$1"
+}
+
+profile_status_get() {
+  status_id="$1" status_key="$2" status_fallback="${3:-}"
+  state_file_get "$STATUS_DIR/$status_id.conf" "$status_key" "$status_fallback"
+}
+
+queue_profile_job() {
+  queue_id="$1" queue_action="$2" queue_reason="${3:-web request}"
+  valid_profile_id "$queue_id" || return 1
+  [ -f "$PROFILES_DIR/$queue_id.conf" ] || return 1
+  case "$queue_action" in fetch|rebuild) ;; *) return 1 ;; esac
+  queue_file="$JOBS_DIR/$queue_id.request"
+  existing_action=$(state_file_get "$queue_file" ACTION)
+  [ "$existing_action" != fetch ] || queue_action=fetch
+  queue_tmp="$queue_file.tmp.$$"
+  umask 077
+  cat > "$queue_tmp" <<EOF
+ACTION=$queue_action
+REQUESTED_EPOCH=$(date +%s)
+REASON_B64=$(b64 "$queue_reason")
+EOF
+  mv "$queue_tmp" "$queue_file"
+  status_tmp="$STATUS_DIR/$queue_id.conf.tmp.$$"
+  cat > "$status_tmp" <<EOF
+STATE=queued
+STAGE=queued
+ACTION=$queue_action
+STARTED_EPOCH=0
+FINISHED_EPOCH=0
+HTTP_STATUS=$(profile_status_get "$queue_id" HTTP_STATUS)
+HTTP_STATUS_LINE_B64=$(profile_status_get "$queue_id" HTTP_STATUS_LINE_B64)
+BYTES=$(profile_status_get "$queue_id" BYTES 0)
+MESSAGE_B64=$(b64 "Задание поставлено в очередь")
+VALIDATION_B64=
+EOF
+  mv "$status_tmp" "$STATUS_DIR/$queue_id.conf"
+}
+
+queue_panel_update() {
+  queue_tmp="$UI_REQUEST.tmp.$$"
+  umask 077
+  printf 'REQUESTED_EPOCH=%s\n' "$(date +%s)" > "$queue_tmp"
+  mv "$queue_tmp" "$UI_REQUEST"
 }
 
 first_profile_id() {

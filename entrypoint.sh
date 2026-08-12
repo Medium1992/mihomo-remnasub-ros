@@ -15,6 +15,11 @@ META=
 ERROR_FILE=
 RUNTIME_DIR=/dev/shm/remnasub
 NETWORK_SIGNATURE_FILE="$RUNTIME_DIR/network.signature"
+JOBS_DIR="$RUNTIME_DIR/jobs"
+STATUS_DIR="$RUNTIME_DIR/status"
+EVENT_LOG="$RUNTIME_DIR/events.log"
+UI_STATUS="$RUNTIME_DIR/ui.status"
+UI_REQUEST="$RUNTIME_DIR/ui.request"
 FINAL="$RUNTIME_DIR/config.yaml"
 UI_DIR="$MIHOMO_DIR/ui"
 WEB_ROOT=/www
@@ -26,7 +31,7 @@ BASIC_AUTH="${BASIC_AUTH:-on}"
 BASIC_AUTH_USER="${BASIC_AUTH_USER:-admin}"
 BASIC_AUTH_HASH="${BASIC_AUTH_HASH:-$BASIC_AUTH_HASH_DEFAULT}"
 
-mkdir -p "$APP_DIR" "$PROFILES_DIR" "$RUNTIME_DIR"
+mkdir -p "$APP_DIR" "$PROFILES_DIR" "$RUNTIME_DIR" "$JOBS_DIR" "$STATUS_DIR"
 
 valid_number() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
@@ -39,6 +44,83 @@ valid_profile_id() {
     ''|*[!0-9A-Za-z_-]*) return 1 ;;
     *) return 0 ;;
   esac
+}
+
+set_profile_context() {
+  context_profile_id="$1"
+  valid_profile_id "$context_profile_id" || return 1
+  [ -f "$PROFILES_DIR/$context_profile_id.conf" ] || return 1
+  ACTIVE_PROFILE_ID="$context_profile_id"
+  PROFILE="$PROFILES_DIR/$context_profile_id.conf"
+  SOURCE="$PROFILES_DIR/$context_profile_id.source.yaml"
+  META="$PROFILES_DIR/$context_profile_id.source.meta"
+  ERROR_FILE="$PROFILES_DIR/$context_profile_id.error.txt"
+  FINAL="$RUNTIME_DIR/$context_profile_id.config.yaml"
+}
+
+event_log() {
+  event_level="$1"
+  event_profile="$2"
+  shift 2
+  event_message=$(printf '%s' "$*" | tr '\r\n' '  ' | head -c 2048)
+  event_line="[$(date +'%Y-%m-%d %H:%M:%S')] [$event_level] [$event_profile] $event_message"
+  printf '%s\n' "$event_line" >> "$EVENT_LOG"
+  log "[$event_level][$event_profile] $event_message"
+  event_size=$(wc -c < "$EVENT_LOG" 2>/dev/null || printf '0')
+  valid_number "$event_size" || event_size=0
+  if [ "$event_size" -gt 262144 ]; then
+    tail -n 300 "$EVENT_LOG" > "$EVENT_LOG.tmp.$$" 2>/dev/null && mv "$EVENT_LOG.tmp.$$" "$EVENT_LOG"
+  fi
+}
+
+write_profile_status() {
+  status_id="$1"
+  status_state="$2"
+  status_stage="$3"
+  status_action="$4"
+  status_started="$5"
+  status_finished="$6"
+  status_http_code="$7"
+  status_http_line="$8"
+  status_bytes="$9"
+  shift 9
+  status_message="$1"
+  status_validation="$2"
+  status_tmp="$STATUS_DIR/$status_id.conf.tmp.$$"
+  umask 077
+  cat > "$status_tmp" <<EOF
+STATE=$status_state
+STAGE=$status_stage
+ACTION=$status_action
+STARTED_EPOCH=$status_started
+FINISHED_EPOCH=$status_finished
+HTTP_STATUS=$status_http_code
+HTTP_STATUS_LINE_B64=$(b64_encode "$status_http_line")
+BYTES=$status_bytes
+MESSAGE_B64=$(b64_encode "$status_message")
+VALIDATION_B64=$(b64_encode "$status_validation")
+EOF
+  mv "$status_tmp" "$STATUS_DIR/$status_id.conf"
+}
+
+queue_profile_job_runtime() {
+  queue_id="$1"
+  queue_action="$2"
+  queue_reason="${3:-scheduled}"
+  valid_profile_id "$queue_id" || return 1
+  [ -f "$PROFILES_DIR/$queue_id.conf" ] || return 1
+  case "$queue_action" in fetch|rebuild) ;; *) return 1 ;; esac
+  queue_file="$JOBS_DIR/$queue_id.request"
+  existing_action=$(awk -F= '$1 == "ACTION" { print $2; exit }' "$queue_file" 2>/dev/null || true)
+  [ "$existing_action" != fetch ] || queue_action=fetch
+  queue_tmp="$queue_file.tmp.$$"
+  umask 077
+  cat > "$queue_tmp" <<EOF
+ACTION=$queue_action
+REQUESTED_EPOCH=$(date +%s)
+REASON_B64=$(b64_encode "$queue_reason")
+EOF
+  mv "$queue_tmp" "$queue_file"
 }
 
 first_profile_id() {
@@ -477,7 +559,6 @@ effective_refresh_seconds() {
 }
 
 resolve_listener_mode() {
-  load_state
   case "$LISTENER_MODE" in
     auto) grep -q '^nf_tables ' /proc/modules 2>/dev/null && ROUTE_MODE=redir-tproxy || ROUTE_MODE=redir-tun ;;
     redir-tun) ROUTE_MODE=redir-tun ;;
@@ -612,6 +693,34 @@ normalize_response_headers() {
   ' "$response_log" > "$response_headers"
 }
 
+response_status_line() {
+  awk '
+    /^[[:space:]]*HTTP\/[0-9.]+[[:space:]]+[0-9][0-9][0-9]/ {
+      line=$0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/\r$/, "", line)
+    }
+    END { print line }
+  ' "$1" 2>/dev/null
+}
+
+response_status_trace() {
+  awk '
+    /^[[:space:]]*HTTP\/[0-9.]+[[:space:]]+[0-9][0-9][0-9]/ {
+      line=$0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/\r$/, "", line)
+      if (trace != "") trace=trace " -> "
+      trace=trace line
+    }
+    END { print trace }
+  ' "$1" 2>/dev/null
+}
+
+response_status_code() {
+  printf '%s\n' "$1" | awk '{ print $2; exit }'
+}
+
 response_header_value() {
   response_headers="$1"
   response_key="$2"
@@ -635,6 +744,8 @@ decode_provider_text() {
 
 write_source_meta() {
   response_headers="$1"
+  source_http_status="$2"
+  source_http_line="$3"
   meta_tmp="$META.tmp.$$"
   provider_title=$(decode_provider_text "$(response_header_value "$response_headers" profile-title)")
   provider_interval=$(response_header_value "$response_headers" profile-update-interval)
@@ -655,6 +766,10 @@ write_source_meta() {
 fetched_at=$(date -Iseconds)
 fetched_epoch=$(date +%s)
 bytes=$(wc -c < "$SOURCE")
+http_status=$source_http_status
+http_status_line_b64=$(b64_encode "$source_http_line")
+configuration_valid=pending
+validation_b64=
 provider_title_b64=$(b64_encode "$provider_title")
 provider_refresh_seconds=$provider_refresh
 subscription_userinfo_b64=$(b64_encode "$subscription_userinfo")
@@ -666,16 +781,33 @@ EOF
   mv "$meta_tmp" "$META"
 }
 
+update_source_meta_validation() {
+  validation_state="$1"
+  validation_text="$2"
+  meta_tmp="$META.tmp.$$"
+  umask 077
+  if [ -f "$META" ]; then
+    awk -F= '$1 != "configuration_valid" && $1 != "validation_b64" { print }' "$META" > "$meta_tmp"
+  else
+    : > "$meta_tmp"
+  fi
+  printf 'configuration_valid=%s\n' "$validation_state" >> "$meta_tmp"
+  printf 'validation_b64=%s\n' "$(b64_encode "$validation_text")" >> "$meta_tmp"
+  mv "$meta_tmp" "$META"
+}
+
 fetch_source() {
-  load_state
-  load_profile
+  FETCH_HTTP_CODE=
+  FETCH_HTTP_LINE=
+  FETCH_HTTP_TRACE=
+  FETCH_BYTES=0
+  FETCH_ERROR=
   url="$(b64_decode_file "$SUB_URL_B64")"
   [ -n "$url" ] || {
-    rm -f "$FINAL"
-    printf '%s\n' "Subscription URL is not configured" > "$ERROR_FILE"
+    FETCH_ERROR="Subscription URL is not configured"
     return 1
   }
-  case "$url" in http://*|https://*) ;; *) printf '%s\n' "Subscription URL must use http(s)" > "$ERROR_FILE"; return 1 ;; esac
+  case "$url" in http://*|https://*) ;; *) FETCH_ERROR="Subscription URL must use http(s)"; return 1 ;; esac
   valid_number "$SUB_TIMEOUT_SECONDS" || SUB_TIMEOUT_SECONDS=30
   [ "$SUB_TIMEOUT_SECONDS" -ge 3 ] && [ "$SUB_TIMEOUT_SECONDS" -le 120 ] || SUB_TIMEOUT_SECONDS=30
   tmp="$SOURCE.tmp.$$"
@@ -699,25 +831,26 @@ $headers
 EOF
   fi
   [ "$SUB_INSECURE_TLS" = 1 ] && set -- "$@" --no-check-certificate
-  if ! wget "$@" "$url" 2> "$response_log"; then
+  wget_rc=0
+  wget "$@" "$url" 2> "$response_log" || wget_rc=$?
+  FETCH_HTTP_LINE=$(response_status_line "$response_log")
+  FETCH_HTTP_TRACE=$(response_status_trace "$response_log")
+  FETCH_HTTP_CODE=$(response_status_code "$FETCH_HTTP_LINE")
+  if [ "$wget_rc" -ne 0 ]; then
+    wget_detail=$(tail -n 1 "$response_log" 2>/dev/null | tr -d '\r\n' | head -c 1024)
+    [ -n "$FETCH_HTTP_LINE" ] && FETCH_ERROR="$FETCH_HTTP_LINE" || FETCH_ERROR="Subscription download failed"
+    [ -z "$wget_detail" ] || FETCH_ERROR="$FETCH_ERROR: $wget_detail"
     rm -f "$tmp" "$response_log" "$response_headers"
-    printf '%s\n' "Subscription download failed" > "$ERROR_FILE"
     return 1
   fi
   normalize_response_headers "$response_log" "$response_headers"
   rm -f "$response_log"
-  [ -s "$tmp" ] || { rm -f "$tmp" "$response_headers"; printf '%s\n' "Subscription response is empty" > "$ERROR_FILE"; return 1; }
-  [ "$(wc -c < "$tmp")" -le 16777216 ] || { rm -f "$tmp" "$response_headers"; printf '%s\n' "Subscription exceeds 16 MiB" > "$ERROR_FILE"; return 1; }
-  if ! mihomo -t -d "$MIHOMO_DIR" -f "$tmp" >/dev/null 2>&1; then
-    mv "$tmp" "$APP_DIR/invalid-source.yaml" 2>/dev/null || rm -f "$tmp"
-    rm -f "$response_headers"
-    printf '%s\n' "Downloaded YAML is rejected by mihomo" > "$ERROR_FILE"
-    return 1
-  fi
+  [ -s "$tmp" ] || { rm -f "$tmp" "$response_headers"; FETCH_ERROR="Subscription response is empty"; return 1; }
+  FETCH_BYTES=$(wc -c < "$tmp")
+  [ "$FETCH_BYTES" -le 16777216 ] || { rm -f "$tmp" "$response_headers"; FETCH_ERROR="Subscription exceeds 16 MiB"; return 1; }
   mv "$tmp" "$SOURCE"
-  write_source_meta "$response_headers"
+  write_source_meta "$response_headers" "$FETCH_HTTP_CODE" "$FETCH_HTTP_LINE"
   rm -f "$response_headers"
-  rm -f "$ERROR_FILE"
   return 0
 }
 
@@ -939,44 +1072,67 @@ EOF
 }
 
 write_controller_overlay() {
-  ui_url=$(effective_external_ui_url) || return 1
-  [ -n "$ui_url" ] || return 1
   secret=$(b64_decode_file "$EXTERNAL_UI_SECRET_B64")
   echo 'external-controller: 0.0.0.0:9090'
   printf 'secret: '; yaml_single_quote "$secret"; printf '\n'
   echo 'external-ui: ui'
 }
 
+write_ui_status() {
+  ui_state="$1"
+  ui_message="$2"
+  ui_source="$3"
+  ui_tmp="$UI_STATUS.tmp.$$"
+  umask 077
+  cat > "$ui_tmp" <<EOF
+STATE=$ui_state
+UPDATED_EPOCH=$(date +%s)
+MESSAGE_B64=$(b64_encode "$ui_message")
+SOURCE_B64=$(b64_encode "$ui_source")
+EOF
+  mv "$ui_tmp" "$UI_STATUS"
+}
+
 prepare_external_ui() {
+  ui_force="${1:-0}"
+  PANEL_ERROR=
   ui_url=$(effective_external_ui_url) || return 1
   [ -n "$ui_url" ] || return 1
   marker="$APP_DIR/external-ui.source"
   current=$(cat "$marker" 2>/dev/null || true)
-  [ "$current" = "$ui_url" ] && [ -s "$UI_DIR/index.html" ] && return 0
+  [ "$ui_force" = 1 ] || { [ "$current" = "$ui_url" ] && [ -s "$UI_DIR/index.html" ] && return 0; }
 
   archive="$RUNTIME_DIR/external-ui.$$.zip"
+  panel_response="$RUNTIME_DIR/external-ui.$$.response"
   stage="$MIHOMO_DIR/.ui-stage.$$"
   previous="$MIHOMO_DIR/.ui-previous.$$"
-  rm -f "$archive"
+  rm -f "$archive" "$panel_response"
   rm -rf "$stage" "$previous"
   mkdir -p "$stage"
 
   log "downloading external UI"
-  if ! wget -q -O "$archive" "$ui_url"; then
+  if ! wget -S -T 90 -O "$archive" "$ui_url" 2> "$panel_response"; then
+    panel_http=$(response_status_line "$panel_response")
+    panel_detail=$(tail -n 1 "$panel_response" 2>/dev/null | tr -d '\r\n' | head -c 1024)
+    [ -n "$panel_http" ] && PANEL_ERROR="$panel_http" || PANEL_ERROR="Panel download failed"
+    [ -z "$panel_detail" ] || PANEL_ERROR="$PANEL_ERROR: $panel_detail"
     log "external UI download failed"
-    rm -f "$archive"
+    rm -f "$archive" "$panel_response"
     rm -rf "$stage"
     return 1
   fi
+  rm -f "$panel_response"
   archive_size=$(wc -c < "$archive" 2>/dev/null || printf '0')
   valid_number "$archive_size" || archive_size=0
   if [ "$archive_size" -lt 128 ] || [ "$archive_size" -gt 33554432 ]; then
+    PANEL_ERROR="Panel archive has invalid size: $archive_size bytes"
     log "external UI archive has invalid size: $archive_size bytes"
     rm -f "$archive"
     rm -rf "$stage"
     return 1
   fi
   if ! unzip -q "$archive" -d "$stage"; then
+    PANEL_ERROR="Panel archive could not be unpacked"
     log "external UI archive could not be unpacked"
     rm -f "$archive"
     rm -rf "$stage"
@@ -986,12 +1142,14 @@ prepare_external_ui() {
 
   ui_index=$(find "$stage" -type f -name index.html 2>/dev/null | head -n 1)
   [ -n "$ui_index" ] || {
+    PANEL_ERROR="Panel archive does not contain index.html"
     log "external UI archive does not contain index.html"
     rm -rf "$stage"
     return 1
   }
   ui_root=${ui_index%/index.html}
   if find "$ui_root" -type l 2>/dev/null | grep -q .; then
+    PANEL_ERROR="Panel archive contains symbolic links"
     log "external UI archive contains symbolic links"
     rm -rf "$stage"
     return 1
@@ -999,6 +1157,7 @@ prepare_external_ui() {
 
   [ ! -e "$UI_DIR" ] || mv "$UI_DIR" "$previous"
   if ! mv "$ui_root" "$UI_DIR"; then
+    PANEL_ERROR="Panel files could not be installed"
     [ ! -e "$previous" ] || mv "$previous" "$UI_DIR"
     rm -rf "$stage"
     return 1
@@ -1055,11 +1214,24 @@ remove_top_level_keys() {
 }
 
 build_final_config() {
-  [ -s "$SOURCE" ] || { printf '%s\n' "No valid downloaded subscription" > "$ERROR_FILE"; return 1; }
-  overlay="$RUNTIME_DIR/listeners.yaml"
-  controller_overlay="$RUNTIME_DIR/controller.yaml"
-  managed_overlay="$RUNTIME_DIR/managed.yaml"
-  local_override="$RUNTIME_DIR/local-override.yaml"
+  BUILD_VALIDATION=
+  BUILD_ERROR=
+  [ -s "$SOURCE" ] || {
+    BUILD_ERROR="No downloaded subscription"
+    printf '%s\n' "$BUILD_ERROR" > "$ERROR_FILE"
+    return 1
+  }
+  build_prefix="$RUNTIME_DIR/build.$ACTIVE_PROFILE_ID.$$"
+  overlay="$build_prefix.listeners.yaml"
+  controller_overlay="$build_prefix.controller.yaml"
+  managed_overlay="$build_prefix.managed.yaml"
+  local_override="$build_prefix.local-override.yaml"
+  local_config="$build_prefix.local.yaml"
+  managed_config="$build_prefix.managed-config.yaml"
+  listeners_config="$build_prefix.listeners-config.yaml"
+  controller_base="$build_prefix.controller-base.yaml"
+  candidate="$build_prefix.candidate.yaml"
+  validate_log="$build_prefix.validate.log"
   : > "$overlay"
   : > "$controller_overlay"
   : > "$managed_overlay"
@@ -1068,18 +1240,24 @@ build_final_config() {
     b64_decode_file "$LOCAL_OVERRIDE_B64" > "$local_override"
   fi
   if ! write_controller_overlay > "$controller_overlay"; then
-    printf '%s\n' "Mihomo panel settings are invalid" > "$ERROR_FILE"
+    BUILD_ERROR="Mihomo controller settings are invalid"
+    printf '%s\n' "$BUILD_ERROR" > "$ERROR_FILE"
+    update_source_meta_validation 0 "$BUILD_ERROR"
+    rm -f "$build_prefix".*
     return 1
   fi
   write_managed_overlay > "$managed_overlay"
-  apply_top_level_override "$SOURCE" "$FINAL.local" "$local_override"
-  apply_top_level_override "$FINAL.local" "$FINAL.managed" "$managed_overlay"
-  if ! write_listeners_overlay "$FINAL.managed" > "$overlay"; then
-    printf '%s\n' "Listener settings are invalid" > "$ERROR_FILE"
+  apply_top_level_override "$SOURCE" "$local_config" "$local_override"
+  apply_top_level_override "$local_config" "$managed_config" "$managed_overlay"
+  if ! write_listeners_overlay "$managed_config" > "$overlay"; then
+    BUILD_ERROR="Listener settings are invalid"
+    printf '%s\n' "$BUILD_ERROR" > "$ERROR_FILE"
+    update_source_meta_validation 0 "$BUILD_ERROR"
+    rm -f "$build_prefix".*
     return 1
   fi
-  replace_top_level_block "$FINAL.managed" "$FINAL.listeners" listeners "$overlay"
-  remove_top_level_keys "$FINAL.listeners" "$FINAL.controller-base" \
+  replace_top_level_block "$managed_config" "$listeners_config" listeners "$overlay"
+  remove_top_level_keys "$listeners_config" "$controller_base" \
     redir-port \
     tproxy-port \
     tun \
@@ -1094,26 +1272,45 @@ build_final_config() {
     external-ui-name \
     external-doh-server \
     secret
-  apply_top_level_override "$FINAL.controller-base" "$FINAL" "$controller_overlay"
-  if ! mihomo -t -d "$MIHOMO_DIR" -f "$FINAL" > "$RUNTIME_DIR/validate.log" 2>&1; then
-    printf '%s\n' "Final YAML is rejected by mihomo" > "$ERROR_FILE"
+  apply_top_level_override "$controller_base" "$candidate" "$controller_overlay"
+  if ! mihomo -t -d "$MIHOMO_DIR" -f "$candidate" > "$validate_log" 2>&1; then
+    BUILD_VALIDATION=$(cat "$validate_log" 2>/dev/null || true)
+    BUILD_ERROR="Рабочая конфигурация отклонена Mihomo"
+    {
+      printf '%s\n' "$BUILD_ERROR"
+      [ -z "$BUILD_VALIDATION" ] || printf '%s\n' "$BUILD_VALIDATION"
+    } > "$ERROR_FILE"
+    update_source_meta_validation 0 "$BUILD_VALIDATION"
+    rm -f "$build_prefix".*
     return 1
   fi
-  if ! prepare_external_ui; then
-    printf '%s\n' "Mihomo panel cache could not be prepared" > "$ERROR_FILE"
+  BUILD_VALIDATION=$(cat "$validate_log" 2>/dev/null || true)
+  if ! mv "$candidate" "$FINAL"; then
+    BUILD_ERROR="Validated configuration could not be installed"
+    printf '%s\n' "$BUILD_ERROR" > "$ERROR_FILE"
+    update_source_meta_validation 0 "$BUILD_ERROR"
+    rm -f "$build_prefix".*
     return 1
   fi
+  final_version_file="$STATUS_DIR/$ACTIVE_PROFILE_ID.version"
+  final_version=$(cat "$final_version_file" 2>/dev/null || printf '0')
+  valid_number "$final_version" || final_version=0
+  final_version=$((final_version + 1))
+  printf '%s\n' "$final_version" > "$final_version_file.tmp.$$"
+  mv "$final_version_file.tmp.$$" "$final_version_file"
+  update_source_meta_validation 1 "$BUILD_VALIDATION"
+  rm -f "$build_prefix".*
   rm -f "$ERROR_FILE"
   return 0
 }
 
 MIHOMO_PID=
-RELOAD=1
+RESTART_REQUESTED=0
 STOPPING=0
 ROUTING_ACTIVE=0
 
 reload() {
-  RELOAD=1
+  RESTART_REQUESTED=1
   [ -n "$MIHOMO_PID" ] && kill -TERM "$MIHOMO_PID" 2>/dev/null || true
 }
 
@@ -1127,8 +1324,155 @@ stop() {
 trap reload USR1 HUP
 trap stop TERM INT
 
+subscription_worker() {
+  while :; do
+    job_found=0
+    for job_request in "$JOBS_DIR"/p-*.request; do
+      [ -f "$job_request" ] || continue
+      job_found=1
+      job_id=${job_request##*/}
+      job_id=${job_id%.request}
+      valid_profile_id "$job_id" || { rm -f "$job_request"; continue; }
+      job_work="$job_request.work.$$"
+      mv "$job_request" "$job_work" 2>/dev/null || continue
+      job_action=$(awk -F= '$1 == "ACTION" { print $2; exit }' "$job_work" 2>/dev/null || true)
+      rm -f "$job_work"
+      case "$job_action" in fetch|rebuild) ;; *) continue ;; esac
+
+      job_started=$(date +%s)
+      load_state
+      set_profile_context "$job_id" || continue
+      load_profile
+      current_http=$(profile_meta_value http_status)
+      current_http_line=$(b64_decode_file "$(profile_meta_value http_status_line_b64)")
+      current_bytes=$(profile_meta_value bytes)
+      valid_number "$current_bytes" || current_bytes=0
+
+      if [ "$job_action" = fetch ]; then
+        write_profile_status "$job_id" running downloading fetch "$job_started" 0 "" "" 0 "Downloading subscription" ""
+        event_log INFO "$job_id" "subscription download started"
+        if ! fetch_source; then
+          job_finished=$(date +%s)
+          {
+            printf '%s\n' "Не удалось обновить подписку"
+            printf '%s\n' "$FETCH_ERROR"
+          } > "$ERROR_FILE"
+          write_profile_status "$job_id" error download fetch "$job_started" "$job_finished" "$FETCH_HTTP_CODE" "$FETCH_HTTP_LINE" "$FETCH_BYTES" "$FETCH_ERROR" ""
+          event_log ERROR "$job_id" "download failed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $FETCH_ERROR"
+          continue
+        fi
+        current_http="$FETCH_HTTP_CODE"
+        current_http_line="$FETCH_HTTP_LINE"
+        current_bytes="$FETCH_BYTES"
+        write_profile_status "$job_id" running validating fetch "$job_started" 0 "$current_http" "$current_http_line" "$current_bytes" "Response saved; validating configuration" ""
+        event_log INFO "$job_id" "download completed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $current_bytes bytes"
+      else
+        write_profile_status "$job_id" running building rebuild "$job_started" 0 "$current_http" "$current_http_line" "$current_bytes" "Building configuration from saved YAML" ""
+        event_log INFO "$job_id" "configuration rebuild started"
+      fi
+
+      if build_final_config; then
+        job_finished=$(date +%s)
+        write_profile_status "$job_id" ready ready "$job_action" "$job_started" "$job_finished" "$current_http" "$current_http_line" "$current_bytes" "Configuration accepted by Mihomo" "$BUILD_VALIDATION"
+        event_log INFO "$job_id" "configuration accepted and installed"
+        load_state
+        if [ "$RUN_ENABLED" = 1 ] && [ "$ACTIVE_PROFILE_ID" = "$job_id" ]; then
+          if [ -f "$JOBS_DIR/$job_id.request" ]; then
+            event_log INFO "$job_id" "newer profile update is queued; delaying Mihomo switch"
+          else
+            event_log INFO "$job_id" "requesting Mihomo restart with validated configuration"
+            kill -HUP 1 2>/dev/null || true
+          fi
+        fi
+      else
+        job_finished=$(date +%s)
+        job_message="$BUILD_ERROR"
+        [ -n "$job_message" ] || job_message="Configuration validation failed"
+        write_profile_status "$job_id" error validation "$job_action" "$job_started" "$job_finished" "$current_http" "$current_http_line" "$current_bytes" "$job_message" "$BUILD_VALIDATION"
+        event_log ERROR "$job_id" "$job_message; previous working configuration was kept"
+      fi
+    done
+    [ "$job_found" = 1 ] && sleep 1 || sleep 2
+  done
+}
+
+panel_worker() {
+  panel_retry_at=0
+  while :; do
+    load_state
+    panel_url=$(effective_external_ui_url 2>/dev/null || true)
+    panel_marker=$(cat "$APP_DIR/external-ui.source" 2>/dev/null || true)
+    panel_force=0
+    if [ -f "$UI_REQUEST" ]; then
+      panel_work="$UI_REQUEST.work.$$"
+      if mv "$UI_REQUEST" "$panel_work" 2>/dev/null; then
+        rm -f "$panel_work"
+        panel_force=1
+      fi
+    fi
+    panel_now=$(date +%s)
+    if [ -n "$panel_url" ] && { [ "$panel_force" = 1 ] || [ "$panel_marker" != "$panel_url" ] || [ ! -s "$UI_DIR/index.html" ]; }; then
+      if [ "$panel_force" = 1 ] || [ "$panel_now" -ge "$panel_retry_at" ]; then
+        write_ui_status downloading "Downloading Mihomo panel" "$panel_url"
+        event_log INFO panel "external UI download started"
+        if prepare_external_ui "$panel_force"; then
+          write_ui_status ready "Mihomo panel is ready" "$panel_url"
+          event_log INFO panel "external UI installed without restarting Mihomo"
+          panel_retry_at=0
+        else
+          [ -n "$PANEL_ERROR" ] || PANEL_ERROR="Mihomo panel download failed"
+          write_ui_status error "$PANEL_ERROR" "$panel_url"
+          event_log ERROR panel "$PANEL_ERROR"
+          panel_retry_at=$((panel_now + 60))
+        fi
+      fi
+    elif [ -s "$UI_DIR/index.html" ]; then
+      panel_state=$(awk -F= '$1 == "STATE" { print $2; exit }' "$UI_STATUS" 2>/dev/null || true)
+      [ "$panel_state" = ready ] || write_ui_status ready "Mihomo panel is ready" "$panel_url"
+    fi
+    sleep 2
+  done
+}
+
+refresh_timer() {
+  while :; do
+    sleep 10
+    for timer_profile in "$PROFILES_DIR"/p-*.conf; do
+      [ -f "$timer_profile" ] || continue
+      timer_id=${timer_profile##*/}
+      timer_id=${timer_id%.conf}
+      load_state
+      set_profile_context "$timer_id" || continue
+      load_profile
+      timer_url=$(b64_decode_file "$SUB_URL_B64")
+      [ -n "$timer_url" ] || continue
+      timer_state=$(awk -F= '$1 == "STATE" { print $2; exit }' "$STATUS_DIR/$timer_id.conf" 2>/dev/null || true)
+      case "$timer_state" in queued|running) continue ;; esac
+      [ -f "$JOBS_DIR/$timer_id.request" ] && continue
+      refresh_seconds=$(effective_refresh_seconds)
+      timer_action=$(awk -F= '$1 == "ACTION" { print $2; exit }' "$STATUS_DIR/$timer_id.conf" 2>/dev/null || true)
+      timer_finished=$(awk -F= '$1 == "FINISHED_EPOCH" { print $2; exit }' "$STATUS_DIR/$timer_id.conf" 2>/dev/null || true)
+      valid_number "$timer_finished" || timer_finished=0
+      now=$(date +%s)
+      if [ ! -s "$SOURCE" ]; then
+        if [ "$timer_action" = fetch ] && [ $((now - timer_finished)) -lt "$refresh_seconds" ]; then
+          continue
+        fi
+        queue_profile_job_runtime "$timer_id" fetch "initial download"
+        continue
+      fi
+      fetched_epoch=$(profile_meta_value fetched_epoch)
+      valid_number "$fetched_epoch" || fetched_epoch=0
+      if [ "$timer_action" = fetch ] && [ "$timer_finished" -gt "$fetched_epoch" ]; then
+        fetched_epoch=$timer_finished
+      fi
+      [ $((now - fetched_epoch)) -ge "$refresh_seconds" ] || continue
+      queue_profile_job_runtime "$timer_id" fetch "scheduled refresh"
+    done
+  done
+}
+
 supervisor() {
-  last_fetch=0
   while [ "$STOPPING" = 0 ]; do
     load_state
     if [ "$RUN_ENABLED" != 1 ]; then
@@ -1137,80 +1481,63 @@ supervisor() {
         ROUTING_ACTIVE=0
         log "network interception stopped and cleaned"
       fi
-      rm -f "$ERROR_FILE"
-      sleep 2
+      RESTART_REQUESTED=0
+      sleep 1
       continue
     fi
-    load_profile
-    refresh_seconds=$(effective_refresh_seconds)
-    url="$(b64_decode_file "$SUB_URL_B64")"
-    if [ -z "$url" ]; then
-      printf '%s\n' "Subscription URL is not configured" > "$ERROR_FILE"
-      rm -f "$FINAL"
-      sleep 5
-      continue
-    fi
-    now=$(date +%s)
-    if [ "$RELOAD" = 1 ] || [ ! -s "$SOURCE" ] || [ $((now - last_fetch)) -ge "$refresh_seconds" ]; then
-      RELOAD=0
-      if fetch_source && build_final_config; then
-        last_fetch=$(date +%s)
-        log "subscription refreshed; final config is valid"
-      else
-        log "subscription refresh failed: $(cat "$ERROR_FILE" 2>/dev/null || echo unknown)"
-      fi
-    fi
-    if [ -s "$FINAL" ]; then
-      route_cleanup
-      ROUTING_ACTIVE=0
-      resolve_listener_mode
-      if ! route_pre_start > "$RUNTIME_DIR/route.log" 2>&1; then
-        printf '%s\n' "Failed to apply pre-start routing rules" > "$ERROR_FILE"
-        log "routing pre-start failed"
-        sleep 5
-        continue
-      fi
-      case "$ROUTE_MODE" in tproxy|redir-tproxy) ROUTING_ACTIVE=1 ;; esac
-      log "starting mihomo ($(mihomo -v 2>/dev/null | head -n1))"
-      mihomo -d "$MIHOMO_DIR" -f "$FINAL" &
-      MIHOMO_PID=$!
-      if ! route_post_start >> "$RUNTIME_DIR/route.log" 2>&1; then
-        printf '%s\n' "Failed to apply post-start routing rules" > "$ERROR_FILE"
-        kill -TERM "$MIHOMO_PID" 2>/dev/null || true
-      else
-        [ "$ROUTE_MODE" = redir-tun ] && ROUTING_ACTIVE=1
-      fi
-      wait "$MIHOMO_PID"
-      rc=$?
-      MIHOMO_PID=
-      route_cleanup
-      ROUTING_ACTIVE=0
-      [ "$STOPPING" = 1 ] && break
-      [ "$RELOAD" = 1 ] && continue
-      log "mihomo exited ($rc), retrying in 5s"
-      sleep 5
-    else
-      sleep 5
-    fi
-  done
-}
 
-refresh_timer() {
-  last_signal=0
-  while :; do
-    sleep 5
-    load_state
+    active_id="$ACTIVE_PROFILE_ID"
+    set_profile_context "$active_id" || { sleep 2; continue; }
     load_profile
-    url="$(b64_decode_file "$SUB_URL_B64")"
-    [ -n "$url" ] || continue
-    refresh_seconds=$(effective_refresh_seconds)
-    fetched_epoch=$(awk -F= '$1 == "fetched_epoch" { print $2; exit }' "$META" 2>/dev/null || true)
-    valid_number "$fetched_epoch" || continue
-    now=$(date +%s)
-    [ $((now - fetched_epoch)) -ge "$refresh_seconds" ] || continue
-    [ $((now - last_signal)) -ge "$refresh_seconds" ] || continue
-    last_signal=$now
-    kill -USR1 1 2>/dev/null || true
+    if [ ! -s "$FINAL" ]; then
+      active_job_state=$(awk -F= '$1 == "STATE" { print $2; exit }' "$STATUS_DIR/$active_id.conf" 2>/dev/null || true)
+      if [ ! -f "$JOBS_DIR/$active_id.request" ]; then
+        case "$active_job_state" in
+          ''|idle|ready)
+            if [ -s "$SOURCE" ]; then
+              queue_profile_job_runtime "$active_id" rebuild "runtime needs final configuration"
+            else
+              queue_profile_job_runtime "$active_id" fetch "runtime needs subscription"
+            fi
+            ;;
+        esac
+      fi
+      sleep 1
+      continue
+    fi
+
+    RESTART_REQUESTED=0
+    route_cleanup
+    ROUTING_ACTIVE=0
+    load_state
+    set_profile_context "$active_id" || { sleep 2; continue; }
+    load_profile
+    resolve_listener_mode
+    if ! route_pre_start > "$RUNTIME_DIR/route.log" 2>&1; then
+      printf '%s\n' "Failed to apply pre-start routing rules" > "$ERROR_FILE"
+      event_log ERROR "$active_id" "routing pre-start failed"
+      sleep 5
+      continue
+    fi
+    case "$ROUTE_MODE" in tproxy|redir-tproxy) ROUTING_ACTIVE=1 ;; esac
+    event_log INFO "$active_id" "starting Mihomo ($(mihomo -v 2>/dev/null | head -n1))"
+    mihomo -d "$MIHOMO_DIR" -f "$FINAL" &
+    MIHOMO_PID=$!
+    if ! route_post_start >> "$RUNTIME_DIR/route.log" 2>&1; then
+      printf '%s\n' "Failed to apply post-start routing rules" > "$ERROR_FILE"
+      kill -TERM "$MIHOMO_PID" 2>/dev/null || true
+    else
+      [ "$ROUTE_MODE" = redir-tun ] && ROUTING_ACTIVE=1
+    fi
+    wait "$MIHOMO_PID"
+    rc=$?
+    MIHOMO_PID=
+    route_cleanup
+    ROUTING_ACTIVE=0
+    [ "$STOPPING" = 1 ] && break
+    [ "$RESTART_REQUESTED" = 1 ] && continue
+    event_log ERROR "$active_id" "Mihomo exited with code $rc; retrying in 5 seconds"
+    sleep 5
   done
 }
 
@@ -1233,6 +1560,11 @@ network_settings_watcher() {
 }
 
 sh "$MIHOMO_DIR/scripts/05-fw-modules.sh" || log "WARNING: firewall backend setup was incomplete"
+for obsolete_error in "$PROFILES_DIR"/p-*.error.txt; do
+  [ -f "$obsolete_error" ] || continue
+  [ "$(cat "$obsolete_error" 2>/dev/null || true)" = "Mihomo panel cache could not be prepared" ] || continue
+  : > "$obsolete_error"
+done
 load_state
 startup_network_signature=$(network_signature)
 if apply_network_settings 1 > "$RUNTIME_DIR/network.log" 2>&1; then
@@ -1248,5 +1580,7 @@ build_webroot
 httpd -f -p 80 -h "$WEBROOT" -c "$HTTPD_CONF" &
 log "web UI started on :80"
 network_settings_watcher &
+panel_worker &
+subscription_worker &
 refresh_timer &
 supervisor
