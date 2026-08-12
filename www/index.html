@@ -79,6 +79,11 @@
               <div class="config-toolbar"><span>Только чтение</span><button class="icon-button" type="button" id="copy-dashboard-yaml" title="Копировать рабочий YAML"><svg><use href="#i-copy"/></svg></button></div>
               <textarea class="config-viewer" id="dashboard-yaml" readonly spellcheck="false" aria-label="Рабочий YAML">Файл ещё не создан.</textarea>
             </details>
+            <details class="collapse-block runtime-events" id="runtime-events-details">
+              <summary><span>События контейнера<small>Загрузка подписок, проверка конфигураций и обновление панели · хранится только в RAM</small></span><svg><use href="#i-chevron"/></svg></summary>
+              <div class="config-toolbar"><span id="runtime-events-state">Событий пока нет</span><button class="icon-button" type="button" id="copy-runtime-events" title="Копировать журнал"><svg><use href="#i-copy"/></svg></button></div>
+              <textarea class="config-viewer" id="runtime-events" readonly spellcheck="false" aria-label="События контейнера">Событий пока нет.</textarea>
+            </details>
             <div class="inline-alert hidden" id="dashboard-error" role="alert"></div>
           </div>
         </div>
@@ -288,7 +293,7 @@
 
   <div class="modal-layer hidden" id="source-yaml-modal">
     <section class="modal yaml-modal" role="dialog" aria-modal="true" aria-labelledby="source-yaml-title">
-      <header class="modal-header"><div><h2 id="source-yaml-title">Полученный YAML</h2><p id="source-yaml-subtitle">Последний валидный ответ источника без локальных изменений</p></div><button class="round-button" type="button" id="close-source-yaml" title="Закрыть"><svg><use href="#i-close"/></svg></button></header>
+      <header class="modal-header"><div><h2 id="source-yaml-title">Полученный YAML</h2><p id="source-yaml-subtitle">Последний HTTP-ответ источника без локальных изменений</p></div><button class="round-button" type="button" id="close-source-yaml" title="Закрыть"><svg><use href="#i-close"/></svg></button></header>
       <div class="yaml-modal-body"><textarea class="config-viewer" id="source-yaml-viewer" readonly spellcheck="false" aria-label="Полученный YAML">Файл ещё не создан.</textarea></div>
       <footer class="modal-actions"><button class="secondary-button" type="button" id="copy-source-yaml"><svg><use href="#i-copy"/></svg>Копировать</button><button class="primary-button" type="button" id="done-source-yaml">Готово</button></footer>
     </section>

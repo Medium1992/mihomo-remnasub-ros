@@ -16,6 +16,8 @@
   let sidebarFingerprint = "";
   let dashboardFingerprint = "";
   let dashboardYamlProfileId = "";
+  let dashboardYamlVersion = "";
+  let pollTimer = 0;
   let toastTimer = 0;
   const externalUIPresets = {
     "zashboard": "https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip",
@@ -157,6 +159,38 @@
     while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
     const digits = unit > 0 && size < 10 ? 1 : 0;
     return `${size.toFixed(digits)} ${units[unit]}`;
+  }
+
+  function profileBusy(profile) {
+    return ["queued", "running"].includes(profile && profile.refresh_state);
+  }
+
+  function refreshStageLabel(profile) {
+    if (!profile) return "";
+    if (profile.refresh_state === "queued") return "В очереди";
+    if (profile.refresh_state !== "running") return "";
+    return ({
+      downloading: "Загрузка YAML",
+      validating: "Проверка конфигурации",
+      building: "Сборка конфигурации"
+    })[profile.refresh_stage] || "Обновление";
+  }
+
+  function profileDiagnostic(profile) {
+    return decode(profile.refresh_validation_b64) || decode(profile.error_b64) || decode(profile.refresh_message_b64);
+  }
+
+  function anyBackgroundWork() {
+    return model.profiles.some(profileBusy) || runtime.external_ui_state === "downloading";
+  }
+
+  function schedulePoll(delay) {
+    window.clearTimeout(pollTimer);
+    pollTimer = window.setTimeout(async () => {
+      try { await load({ quiet: true }); }
+      catch (_) {}
+      schedulePoll(anyBackgroundWork() ? 900 : 5000);
+    }, delay);
   }
 
   function parseSubscriptionUserinfo(raw) {
@@ -334,11 +368,15 @@
     const configured = Boolean(active && profileUrl(active));
     const running = Boolean(runtime.mihomo_running && runtime.run_enabled && configured && runtime.final_present);
     const enabled = Boolean(runtime.run_enabled);
+    const busyLabel = refreshStageLabel(active);
+    const previous = Boolean(runtime.using_previous_config && runtime.final_present);
+    const refreshFailed = Boolean(active && active.refresh_state === "error");
     const fingerprint = JSON.stringify({
       active: model.state.active_profile_id,
       profiles: model.profiles.map((profile) => [profile.id, profile.display_name_b64, profile.name_b64, profile.url_b64]),
       listener: model.state.listener_mode,
-      runtime: [configured, running, enabled, runtime.source_present, runtime.final_present, runtime.error_b64, runtime.nft_available]
+      runtime: [configured, running, enabled, runtime.source_present, runtime.final_present, runtime.final_mtime, runtime.final_version, runtime.configuration_valid, runtime.using_previous_config, runtime.error_b64, runtime.event_log_b64, runtime.nft_available],
+      refresh: active && [active.refresh_state, active.refresh_stage, active.refresh_http_status, active.refresh_bytes, active.refresh_message_b64]
     });
     if (fingerprint === dashboardFingerprint) return;
     dashboardFingerprint = fingerprint;
@@ -352,13 +390,13 @@
     $("dashboard-profile-url").textContent = configured ? profileUrl(active) : "Добавьте подписку, чтобы запустить Mihomo.";
     const chip = $("dashboard-runtime-chip");
     chip.className = `state-pill ${running ? "running" : enabled && configured ? "waiting" : "idle"}`;
-    chip.innerHTML = `<i></i>${running ? "Работает" : enabled && configured ? "Запускается" : "Остановлено"}`;
+    chip.innerHTML = `<i></i>${running ? (previous ? "Работает · предыдущая конфигурация" : "Работает") : enabled && configured ? (busyLabel || (refreshFailed ? "Ошибка обновления" : "Запускается")) : "Остановлено"}`;
     $("dashboard-power").disabled = !configured;
     $("dashboard-power").classList.toggle("running", enabled);
     $("dashboard-power").querySelector("span").textContent = enabled ? "Остановить" : "Запустить";
-    $("dashboard-power-note").textContent = running ? "Ядро работает" : enabled && configured ? "Ожидание запуска" : "Ядро остановлено";
-    $("dashboard-source-state").textContent = runtime.source_present ? "Получен" : "Нет данных";
-    $("dashboard-config-state").textContent = runtime.final_present ? "Проверена" : "Не собрана";
+    $("dashboard-power-note").textContent = running ? (previous ? "Старый проверенный YAML остаётся активным" : "Ядро работает") : enabled && configured ? (busyLabel || "Ожидание запуска") : "Ядро остановлено";
+    $("dashboard-source-state").textContent = busyLabel || (refreshFailed ? (active.refresh_http_status ? `Ошибка · HTTP ${active.refresh_http_status}` : "Ошибка загрузки") : runtime.source_present ? (runtime.configuration_valid === "0" ? "Получен · отклонён" : "Получен") : "Нет данных");
+    $("dashboard-config-state").textContent = runtime.final_present ? (previous ? "Сохранена предыдущая" : "Проверена") : "Не собрана";
     $("dashboard-route-mode").textContent = listenerModeLabel(model.state.listener_mode);
     const yamlDetails = $("dashboard-yaml-details");
     yamlDetails.classList.toggle("hidden", !runtime.final_present);
@@ -366,12 +404,19 @@
       yamlDetails.open = false;
       $("dashboard-yaml").value = "Файл ещё не создан.";
       dashboardYamlProfileId = "";
-    } else if (yamlDetails.open && dashboardYamlProfileId !== model.state.active_profile_id) {
+      dashboardYamlVersion = "";
+    } else if (yamlDetails.open && dashboardYamlVersion !== `${model.state.active_profile_id}:${runtime.final_version || 0}:${runtime.final_mtime || 0}`) {
       loadDashboardYaml().catch(() => {});
     }
-    const error = decode(runtime.error_b64);
-    $("dashboard-error").textContent = error;
+    const error = busyLabel ? "" : decode(runtime.error_b64);
+    $("dashboard-error").textContent = error && previous ? `Последнее обновление отклонено. Mihomo продолжает работать с предыдущей конфигурацией.\n\n${error}` : error;
     $("dashboard-error").classList.toggle("hidden", !error);
+    const events = decode(runtime.event_log_b64);
+    const eventsViewer = $("runtime-events");
+    const wasAtBottom = eventsViewer.scrollHeight - eventsViewer.scrollTop - eventsViewer.clientHeight < 24;
+    if (eventsViewer.value !== (events || "Событий пока нет.")) eventsViewer.value = events || "Событий пока нет.";
+    if (wasAtBottom) eventsViewer.scrollTop = eventsViewer.scrollHeight;
+    $("runtime-events-state").textContent = events ? "Последние 200 событий" : "Событий пока нет";
   }
 
   function profileHealth(profile) {
@@ -379,6 +424,14 @@
     const error = decode(profile.error_b64) || (active ? decode(runtime.error_b64) : "");
     const source = Boolean(profile.source_present || (active && runtime.source_present));
     const final = Boolean(profile.final_present || (active && runtime.final_present));
+    const busy = refreshStageLabel(profile);
+    if (busy) return { className: "warning busy", label: busy };
+    if (profile.refresh_state === "error" && profile.refresh_stage === "download") {
+      return { className: "error", label: profile.refresh_http_status ? `Ошибка · HTTP ${profile.refresh_http_status}` : "Ошибка загрузки" };
+    }
+    if (profile.refresh_state === "error" || profile.configuration_valid === "0") {
+      return { className: "error", label: final ? "Обновление отклонено" : "Ошибка конфигурации" };
+    }
     if (error) return { className: "error", label: "Ошибка конфигурации" };
     if (!profileUrl(profile)) return { className: "warning", label: "URL не настроен" };
     if (active && runtime.mihomo_running) return { className: "good", label: "Mihomo работает" };
@@ -402,6 +455,10 @@
     $("subscription-list").innerHTML = profiles.map((profile) => {
       const active = profile.id === model.state.active_profile_id;
       const health = profileHealth(profile);
+      const busy = profileBusy(profile);
+      const hasUrl = Boolean(profileUrl(profile));
+      const response = [profile.refresh_http_status ? `HTTP ${profile.refresh_http_status}` : "", profile.refresh_bytes ? formatBytes(profile.refresh_bytes) : ""].filter(Boolean).join(" · ");
+      const diagnostic = profile.refresh_state === "error" || profile.configuration_valid === "0" ? profileDiagnostic(profile) : "";
       return `<article class="subscription-card${active ? " active" : ""}" data-profile-row="${escapeHtml(profile.id)}">
         <div class="subscription-main">
           <span class="subscription-icon"><svg><use href="#i-bookmark"></use></svg></span>
@@ -412,12 +469,13 @@
           </div>
           <div class="subscription-actions">
             <button class="icon-button" type="button" data-profile-action="edit" data-profile-id="${escapeHtml(profile.id)}" title="Настройки">${icon("settings")}</button>
-            <button class="icon-button" type="button" data-profile-action="refresh" data-profile-id="${escapeHtml(profile.id)}" title="${active ? "Обновить" : "Сначала выберите профиль"}"${active ? "" : " disabled"}>${icon("refresh")}</button>
+            <button class="icon-button${busy ? " loading" : ""}" type="button" data-profile-action="refresh" data-profile-id="${escapeHtml(profile.id)}" title="${hasUrl ? (busy ? "Обновление выполняется" : "Обновить сейчас") : "Сначала укажите URL"}"${hasUrl && !busy ? "" : " disabled"}>${icon("refresh")}</button>
             <button class="icon-button" type="button" data-profile-action="source" data-profile-id="${escapeHtml(profile.id)}" title="Полученный YAML">${icon("file")}</button>
             <button class="icon-button danger" type="button" data-profile-action="delete" data-profile-id="${escapeHtml(profile.id)}" title="${active ? "Активную подписку удалить нельзя" : "Удалить"}"${active ? " disabled" : ""}>${icon("trash")}</button>
           </div>
         </div>
-        <footer class="subscription-footer"><span class="subscription-health ${health.className}"><i></i>${health.label}</span><code>${escapeHtml(profile.id)}</code></footer>
+        <footer class="subscription-footer"><span class="subscription-health ${health.className}"><i></i>${health.label}</span>${response ? `<span class="subscription-response">${escapeHtml(response)}</span>` : ""}<code>${escapeHtml(profile.id)}</code></footer>
+        ${diagnostic ? `<details class="subscription-diagnostic" data-profile-diagnostics><summary>Подробности последней ошибки</summary><pre>${escapeHtml(diagnostic)}</pre></details>` : ""}
       </article>`;
     }).join("");
     $("subscription-list").classList.toggle("hidden", profiles.length === 0);
@@ -426,7 +484,7 @@
 
   function renderSettings(force = false) {
     const state = model.state;
-    const fingerprint = JSON.stringify({ state, nft: runtime.nft_available, ui: runtime.external_ui_present, iface: runtime.active_network_interface_b64, cidr: runtime.active_network_cidr_b64 });
+    const fingerprint = JSON.stringify({ state, nft: runtime.nft_available, ui: [runtime.external_ui_present, runtime.external_ui_state, runtime.external_ui_message_b64, runtime.external_ui_mtime], iface: runtime.active_network_interface_b64, cidr: runtime.active_network_cidr_b64 });
     if (settingsReady && !force && (settingsDirty || fingerprint === settingsFingerprint)) return;
     renderHeaders("global-header-rows", decode(state.global_headers_b64), true);
     $("mihomo-find-process-mode").value = state.mihomo_find_process_mode || "off";
@@ -488,8 +546,17 @@
     updateExternalUIPreset();
     $("external-ui-secret").value = decode(state.external_ui_secret_b64);
     const uiState = $("external-ui-state");
-    uiState.textContent = runtime.external_ui_present ? "Скачана · /etc/mihomo/ui" : "Ожидает загрузки · /etc/mihomo/ui";
-    uiState.className = runtime.external_ui_present ? "ready" : "pending";
+    const uiMessage = decode(runtime.external_ui_message_b64);
+    if (runtime.external_ui_state === "downloading") {
+      uiState.textContent = "Скачивается · Mihomo продолжает работать";
+      uiState.className = "pending";
+    } else if (runtime.external_ui_state === "error") {
+      uiState.textContent = `Ошибка загрузки${uiMessage ? ` · ${uiMessage}` : ""}`;
+      uiState.className = "error";
+    } else {
+      uiState.textContent = runtime.external_ui_present ? "Готова · /etc/mihomo/ui" : "Ожидает загрузки · /etc/mihomo/ui";
+      uiState.className = runtime.external_ui_present ? "ready" : "pending";
+    }
     settingsReady = true;
     settingsDirty = false;
     settingsFingerprint = fingerprint;
@@ -526,10 +593,15 @@
     toast(stop ? "Остановка Mihomo запрошена" : "Запуск Mihomo запрошен");
   }
 
-  async function refreshActiveProfile() {
-    await requestJson("/cgi-bin/remna-refresh", { method: "POST" });
-    toast("Обновление подписки запрошено");
-    window.setTimeout(() => load({ quiet: true }).catch(() => {}), 900);
+  async function refreshProfile(profileId) {
+    await requestJson("/cgi-bin/remna-refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ profile_id: profileId })
+    });
+    await load({ quiet: true });
+    schedulePoll(250);
+    toast("Подписка поставлена на обновление");
   }
 
   function openMihomo() {
@@ -544,13 +616,14 @@
     const connection = new URLSearchParams({
       hostname: location.hostname,
       port: "9090",
-      http: "1"
+      http: "1",
+      _r: String(runtime.external_ui_mtime || 0)
     });
     if (secret) connection.set("secret", secret);
 
     if (preset === "zashboard" || preset === "zashboard-cdn") {
       connection.set("label", "RemnaSub RoS");
-      panel.hash = `/setup?${connection.toString()}`;
+      panel.search = `?${connection.toString()}`;
     } else if (preset === "metacubexd") {
       panel.hash = `/?${connection.toString()}`;
     } else if (preset === "yacd-meta") {
@@ -654,14 +727,15 @@
       fields.profile_id = created;
     }
     try {
-      await send(fields);
+      var saveResult = await send(fields);
     } catch (error) {
       if (created) await send({ action: "delete", profile_id: created }).catch(() => {});
       throw error;
     }
     closeEditor();
     await load();
-    toast("Подписка сохранена");
+    schedulePoll(250);
+    toast(saveResult && saveResult.queued_action === "fetch" ? "Подписка сохранена · загрузка началась" : saveResult && saveResult.queued_action === "rebuild" ? "Подписка сохранена · конфигурация проверяется" : "Подписка сохранена");
   }
 
   async function openSourceYaml(profileId) {
@@ -669,6 +743,8 @@
     if (!profile) return;
     sourceYamlProfileId = profileId;
     $("source-yaml-title").textContent = `Полученный YAML · ${profileName(profile)}`;
+    const sourceState = [profile.refresh_http_status ? `HTTP ${profile.refresh_http_status}` : "", profile.refresh_bytes ? formatBytes(profile.refresh_bytes) : "", profile.refresh_state === "error" && profile.configuration_valid !== "0" ? "сохранён предыдущий ответ" : profile.configuration_valid === "0" ? "рабочая конфигурация отклонена" : profile.configuration_valid === "1" ? "проверка пройдена" : ""].filter(Boolean).join(" · ");
+    $("source-yaml-subtitle").textContent = sourceState || "Последний HTTP-ответ источника без локальных изменений";
     $("source-yaml-viewer").value = "Загрузка...";
     $("source-yaml-modal").classList.remove("hidden");
     const result = await request(`/cgi-bin/remna-config?kind=source&profile_id=${encodeURIComponent(profileId)}`);
@@ -685,10 +761,12 @@
   async function loadDashboardYaml() {
     const profileId = model.state.active_profile_id;
     if (!profileId || !runtime.final_present) return;
+    const version = `${profileId}:${runtime.final_version || 0}:${runtime.final_mtime || 0}`;
     $("dashboard-yaml").value = "Загрузка...";
     const result = await request(`/cgi-bin/remna-config?kind=final&profile_id=${encodeURIComponent(profileId)}`);
     if (profileId !== model.state.active_profile_id) return;
     dashboardYamlProfileId = profileId;
+    dashboardYamlVersion = version;
     $("dashboard-yaml").value = result.text || "Файл ещё не создан.";
     $("dashboard-yaml").scrollTop = 0;
   }
@@ -720,7 +798,7 @@
     const redirPort = $("redir-port").value;
     const tproxyPort = $("tproxy-port").value;
     if ((mode === "redir-tproxy" || (mode === "auto" && runtime.nft_available)) && redirPort === tproxyPort) throw new Error("Для REDIR и TPROXY нужны разные порты");
-    await send({
+    const result = await send({
       action: "save-settings",
       global_headers: serializedHeaders("global-header-rows", true),
       listener_mode: mode,
@@ -764,7 +842,16 @@
     settingsDirty = false;
     await load();
     renderSettings(true);
-    toast(model.state.run_enabled ? "Настройки сохранены · Mihomo перезапускается" : "Настройки сохранены");
+    schedulePoll(250);
+    if (result.panel_update && !result.core_rebuild && !result.source_refresh) {
+      toast("Настройки сохранены · новая панель скачивается без перезапуска Mihomo");
+    } else if (result.source_refresh) {
+      toast("Настройки сохранены · подписка загружается и проверяется");
+    } else if (result.core_rebuild) {
+      toast("Настройки сохранены · Mihomo переключится после успешной проверки");
+    } else {
+      toast("Настройки сохранены");
+    }
   }
 
   function protectedAction(handler) {
@@ -804,11 +891,12 @@
       if (button.disabled) return;
       const profileId = button.dataset.profileId;
       if (button.dataset.profileAction === "edit") await openEditor(profileId);
-      if (button.dataset.profileAction === "refresh") await refreshActiveProfile();
+      if (button.dataset.profileAction === "refresh") await refreshProfile(profileId);
       if (button.dataset.profileAction === "source") await openSourceYaml(profileId);
       if (button.dataset.profileAction === "delete") askDelete(profileId);
       return;
     }
+    if (event.target.closest("[data-profile-diagnostics]")) return;
     const card = event.target.closest("[data-profile-row]");
     if (card) await openEditor(card.dataset.profileRow);
   }));
@@ -855,6 +943,7 @@
     if ($("dashboard-yaml-details").open) await loadDashboardYaml();
   }));
   $("copy-dashboard-yaml").addEventListener("click", protectedAction(() => copyViewer("dashboard-yaml")));
+  $("copy-runtime-events").addEventListener("click", protectedAction(() => copyViewer("runtime-events")));
   $("copy-source-yaml").addEventListener("click", protectedAction(() => copyViewer("source-yaml-viewer")));
   $("close-source-yaml").addEventListener("click", closeSourceYaml);
   $("done-source-yaml").addEventListener("click", closeSourceYaml);
@@ -871,6 +960,5 @@
 
   const initialPage = location.hash.slice(1);
   if (["dashboard", "subscriptions", "settings"].includes(initialPage)) showPage(initialPage);
-  load().catch(() => {});
-  window.setInterval(() => load({ quiet: true }).catch(() => {}), 15000);
+  load().catch(() => {}).finally(() => schedulePoll(anyBackgroundWork() ? 900 : 5000));
 })();

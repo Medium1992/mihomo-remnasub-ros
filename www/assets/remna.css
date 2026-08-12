@@ -144,7 +144,9 @@ input::placeholder, textarea::placeholder { color: #596772; opacity: 1; }
 .icon-button:hover:not(:disabled) { color: var(--base-content); background: rgba(255, 255, 255, .055); }
 .icon-button.danger:hover:not(:disabled) { color: var(--error); background: rgba(237, 90, 98, .09); }
 .icon-button svg { width: 17px; height: 17px; }
-.subscription-footer { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 14px 8px 65px; border-top: 1px solid var(--border); color: var(--muted); font-size: 10px; }
+.icon-button.loading svg { animation: refresh-spin .8s linear infinite; }
+@keyframes refresh-spin { to { transform: rotate(360deg); } }
+.subscription-footer { min-height: 38px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 8px 14px 8px 65px; border-top: 1px solid var(--border); color: var(--muted); font-size: 10px; }
 .subscription-health { display: inline-flex; align-items: center; gap: 7px; }
 .subscription-health i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 .subscription-health.good { color: var(--success); }
@@ -153,7 +155,12 @@ input::placeholder, textarea::placeholder { color: #596772; opacity: 1; }
 .subscription-health.warning i { background: var(--warning); }
 .subscription-health.error { color: var(--error); }
 .subscription-health.error i { background: var(--error); }
-.subscription-footer code { max-width: 50%; overflow: hidden; color: var(--faint); font: inherit; text-overflow: ellipsis; white-space: nowrap; }
+.subscription-response { flex: 1 1 auto; color: var(--faint); text-align: center; }
+.subscription-footer code { max-width: 50%; margin-left: auto; overflow: hidden; color: var(--faint); font: inherit; text-overflow: ellipsis; white-space: nowrap; }
+.subscription-diagnostic { border-top: 1px solid var(--border); color: var(--error); background: rgba(237, 90, 98, .045); }
+.subscription-diagnostic summary { cursor: pointer; padding: 9px 14px 9px 65px; color: #e58b92; font-size: 10px; font-weight: 700; list-style: none; }
+.subscription-diagnostic summary::-webkit-details-marker { display: none; }
+.subscription-diagnostic pre { max-height: 180px; margin: 0; overflow: auto; padding: 2px 14px 12px 65px; color: #d6a0a5; white-space: pre-wrap; overflow-wrap: anywhere; font: 10px/1.5 ui-monospace, Consolas, monospace; }
 .empty-state { min-height: 330px; display: grid; justify-items: center; align-content: center; padding: 35px; border-radius: 12px; color: var(--muted); background: var(--base-100); text-align: center; box-shadow: var(--shadow); }
 .empty-state > span { width: 52px; height: 52px; display: grid; place-items: center; border-radius: 13px; color: var(--muted); background: var(--base-300); }
 .empty-state h2 { margin: 16px 0 0; color: var(--base-content); font-size: 18px; }
@@ -225,6 +232,7 @@ input::placeholder, textarea::placeholder { color: #596772; opacity: 1; }
 .password-field .icon-button { position: absolute; top: 2px; right: 3px; width: 34px; height: 34px; }
 #external-ui-state.ready { color: var(--success); }
 #external-ui-state.pending { color: var(--warning); }
+#external-ui-state.error { max-width: 56%; color: var(--error); text-align: right; overflow-wrap: anywhere; }
 .inline-switch { position: relative; min-height: 38px; display: flex; align-items: center; gap: 8px; padding-left: 46px; border-radius: 9px; background: var(--base-300); cursor: pointer; }
 .inline-switch > i { right: auto; left: 8px; }
 .inline-switch > span { color: var(--base-content) !important; font-size: 11px !important; font-weight: 650; }
@@ -285,6 +293,8 @@ input::placeholder, textarea::placeholder { color: #596772; opacity: 1; }
 .config-viewer:focus { border-color: #536271; box-shadow: none; }
 .dashboard-yaml { margin-top: 18px; }
 .dashboard-yaml.hidden { display: none; }
+.runtime-events { margin-top: 10px; }
+.runtime-events .config-viewer { min-height: 150px; max-height: 300px; }
 .yaml-modal { width: min(900px, calc(100vw - 36px)); height: min(760px, calc(100vh - 36px)); display: flex; flex-direction: column; }
 .yaml-modal-body { min-height: 0; flex: 1 1 0; padding: 16px; }
 .yaml-modal-body .config-viewer { width: 100%; height: 100%; min-height: 0; max-height: none; margin: 0; resize: none; }
@@ -342,7 +352,9 @@ input::placeholder, textarea::placeholder { color: #596772; opacity: 1; }
   .setting-select-row select { width: 100%; }
   .subscription-main { grid-template-columns: 38px minmax(0, 1fr); }
   .subscription-actions { grid-column: 1 / -1; justify-content: flex-end; padding-top: 7px; border-top: 1px solid var(--border); }
-  .subscription-footer { padding-left: 14px; }
+  .subscription-footer { align-items: flex-start; padding-left: 14px; }
+  .subscription-response { order: 3; flex-basis: 100%; text-align: left; }
+  .subscription-footer code { max-width: 55%; }
   .text-setting.compact { grid-template-columns: 1fr; }
   .field-grid, .field-grid.two, .field-grid.three, .network-timeout-grid, .local-managed-grid { grid-template-columns: 1fr; }
   .profile-provider-head { align-items: flex-start; }
