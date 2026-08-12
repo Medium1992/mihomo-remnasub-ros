@@ -3,7 +3,24 @@
 json_headers
 source_present=false; [ -s "$SOURCE" ] && source_present=true
 final_present=false; [ -s "$FINAL" ] && final_present=true
+configured=false; [ -n "$(state_get SUB_URL_B64)" ] && configured=true
+nft_available=false; grep -q '^nf_tables ' /proc/modules 2>/dev/null && nft_available=true
+if [ "$nft_available" = true ]; then firewall_backend=nftables; else firewall_backend=iptables-legacy; fi
+active_network_interface=$(ip -4 route show default 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')
+[ -n "$active_network_interface" ] || active_network_interface=$(ip -o link show up | awk -F': ' '/link\/ether/ {gsub(/@.*$/, "", $2); if ($2 != "lo" && $2 != "Meta" && $2 !~ /^hs5t/) {print $2; exit}}')
+active_network_cidr=$(ip -4 -o addr show dev "$active_network_interface" scope global 2>/dev/null | awk '{print $4; exit}')
+external_ui_present=false; [ -s "$UI_DIR/index.html" ] && external_ui_present=true
+active_profile_id=$(state_file_get "$STATE" ACTIVE_PROFILE_ID "$ACTIVE_PROFILE_ID")
+run_enabled=$(state_file_get "$STATE" RUN_ENABLED 0)
+process_running=false
+pidof mihomo >/dev/null 2>&1 && process_running=true
+mihomo_running=false
+if [ "$process_running" = true ] && [ "$configured" = true ] && [ "$final_present" = true ] && [ "$run_enabled" = 1 ]; then
+  mihomo_running=true
+fi
+profile_count=0
+for profile in "$PROFILES_DIR"/p-*.conf; do [ -f "$profile" ] && profile_count=$((profile_count + 1)); done
 error_b64=$(b64 "$(cat "$ERROR_FILE" 2>/dev/null || true)")
 meta_b64=$(b64 "$(cat "$META" 2>/dev/null || true)")
-printf '{"ok":true,"source_present":%s,"final_present":%s,"mihomo_running":%s,"error_b64":"%s","meta_b64":"%s"}\n' \
-  "$source_present" "$final_present" "$(pidof mihomo >/dev/null 2>&1 && echo true || echo false)" "$error_b64" "$meta_b64"
+printf '{"ok":true,"configured":%s,"source_present":%s,"final_present":%s,"mihomo_running":%s,"mihomo_process_running":%s,"run_enabled":%s,"nft_available":%s,"firewall_backend":"%s","active_network_interface_b64":"%s","active_network_cidr_b64":"%s","external_ui_present":%s,"active_profile_id":"%s","profile_count":%s,"error_b64":"%s","meta_b64":"%s"}\n' \
+  "$configured" "$source_present" "$final_present" "$mihomo_running" "$process_running" "$run_enabled" "$nft_available" "$firewall_backend" "$(b64 "$active_network_interface")" "$(b64 "$active_network_cidr")" "$external_ui_present" "$active_profile_id" "$profile_count" "$error_b64" "$meta_b64"

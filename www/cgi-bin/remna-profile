@@ -1,69 +1,578 @@
 #!/bin/sh
 . /www/cgi-bin/_remna.sh
 
+profile_local_override_enabled() {
+  local_file="$1"
+  local_enabled=$(state_file_get "$local_file" LOCAL_OVERRIDE_ENABLED missing)
+  if [ "$local_enabled" = missing ]; then
+    [ -n "$(state_file_get "$local_file" LOCAL_OVERRIDE_B64)" ] && local_enabled=1 || local_enabled=0
+  fi
+  case "$local_enabled" in 0|1) ;; *) local_enabled=0 ;; esac
+  printf '%s' "$local_enabled"
+}
+
+profile_meta_get() {
+  meta_file="$1" meta_key="$2" meta_fallback="${3:-}"
+  state_file_get "$meta_file" "$meta_key" "$meta_fallback"
+}
+
+profile_effective_name_b64() {
+  effective_file="$1" effective_meta="$2"
+  local_name=$(state_file_get "$effective_file" NAME_B64 "$(b64 "${effective_file##*/}")")
+  use_provider_title=$(state_file_get "$effective_file" SUB_USE_PROVIDER_TITLE 1)
+  provider_title=$(profile_meta_get "$effective_meta" provider_title_b64)
+  if [ "$use_provider_title" = 1 ] && [ -n "$provider_title" ]; then
+    printf '%s' "$provider_title"
+  else
+    printf '%s' "$local_name"
+  fi
+}
+
+profile_effective_refresh() {
+  effective_file="$1" effective_meta="$2"
+  refresh=$(state_file_get "$effective_file" SUB_REFRESH_SECONDS 3600)
+  valid_number "$refresh" && [ "$refresh" -ge 30 ] && [ "$refresh" -le 86400 ] || refresh=3600
+  if [ "$(state_file_get "$effective_file" SUB_USE_PROVIDER_INTERVAL 1)" = 1 ]; then
+    provider_refresh=$(profile_meta_get "$effective_meta" provider_refresh_seconds)
+    if valid_number "$provider_refresh" && [ "$provider_refresh" -ge 30 ] && [ "$provider_refresh" -le 86400 ]; then
+      refresh="$provider_refresh"
+    fi
+  fi
+  printf '%s' "$refresh"
+}
+
+number_or() {
+  number_value="$1" number_fallback="$2"
+  valid_number "$number_value" && printf '%s' "$number_value" || printf '%s' "$number_fallback"
+}
+
+bool_or() {
+  bool_value="$1" bool_fallback="$2"
+  case "$bool_value" in 0|1) printf '%s' "$bool_value" ;; *) printf '%s' "$bool_fallback" ;; esac
+}
+
+valid_header_block() {
+  printf '%s\n' "${1:-}" | awk '
+    function trim(value) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); return value }
+    {
+      sub(/\r$/, "")
+      if ($0 ~ /^[[:space:]]*$/) next
+      separator = index($0, ":")
+      if (separator < 2) exit 1
+      key = trim(substr($0, 1, separator - 1))
+      if (key !~ /^[A-Za-z0-9-]+$/) exit 1
+      key = tolower(key)
+      if (seen[key]++) exit 1
+    }
+  '
+}
+
+sniffer_override_value() {
+  configured=$(state_file_get "$STATE" MIHOMO_SNIFFER_OVERRIDE)
+  case "$configured" in 0|1) printf '%s' "$configured"; return 0 ;; esac
+  printf '0'
+}
+
+valid_port_block() {
+  printf '%s' "${1:-}" | tr ',' '\n' | awk '
+    function trim(value) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); return value }
+    {
+      value=trim($0)
+      if (value == "") next
+      if (value ~ /^[0-9]+$/) {
+        number=value + 0
+        if (number < 1 || number > 65535) exit 1
+        next
+      }
+      if (value ~ /^[0-9]+-[0-9]+$/) {
+        split(value, range, "-")
+        start=range[1] + 0
+        finish=range[2] + 0
+        if (start < 1 || finish > 65535 || start > finish) exit 1
+        next
+      }
+      exit 1
+    }
+  '
+}
+
+profiles_json() {
+  first=1
+  for file in "$PROFILES_DIR"/p-*.conf; do
+    [ -f "$file" ] || continue
+    id=${file##*/}
+    id=${id%.conf}
+    profile_source="$PROFILES_DIR/$id.source.yaml"
+    profile_final="$RUNTIME_DIR/$id.config.yaml"
+    profile_error="$PROFILES_DIR/$id.error.txt"
+    profile_meta="$PROFILES_DIR/$id.source.meta"
+    source_present=false
+    final_present=false
+    updated_at=0
+    [ -s "$profile_source" ] && source_present=true
+    [ -s "$profile_final" ] && final_present=true
+    if [ -f "$profile_source" ]; then
+      updated_at=$(stat -c '%Y' "$profile_source" 2>/dev/null || printf '0')
+    fi
+    [ "$first" = 1 ] || printf ','
+    first=0
+    printf '{"id":"%s","name_b64":"%s","display_name_b64":"%s","url_b64":"%s","refresh_seconds":%s,"effective_refresh_seconds":%s,"local_override_enabled":%s,"source_present":%s,"final_present":%s,"updated_at":%s,"error_b64":"%s"}' \
+      "$id" \
+      "$(state_file_get "$file" NAME_B64 "$(b64 "$id")")" \
+      "$(profile_effective_name_b64 "$file" "$profile_meta")" \
+      "$(state_file_get "$file" SUB_URL_B64)" \
+      "$(number_or "$(state_file_get "$file" SUB_REFRESH_SECONDS 3600)" 3600)" \
+      "$(profile_effective_refresh "$file" "$profile_meta")" \
+      "$(profile_local_override_enabled "$file")" \
+      "$source_present" \
+      "$final_present" \
+      "$updated_at" \
+      "$(b64 "$(cat "$profile_error" 2>/dev/null || true)")"
+  done
+}
+
+write_state() {
+  active_id="$1" run_enabled="$2"
+  tmp_state="$STATE.tmp.$$"
+  umask 077
+  cat > "$tmp_state" <<EOF
+STATE_VERSION=5
+ACTIVE_PROFILE_ID=$active_id
+RUN_ENABLED=$run_enabled
+GLOBAL_HEADERS_B64=$(state_file_get "$STATE" GLOBAL_HEADERS_B64)
+LISTENER_MODE=$(state_file_get "$STATE" LISTENER_MODE auto)
+REDIR_PORT=$(state_file_get "$STATE" REDIR_PORT 12345)
+TPROXY_PORT=$(state_file_get "$STATE" TPROXY_PORT 12346)
+MIHOMO_FIND_PROCESS_MODE=$(state_file_get "$STATE" MIHOMO_FIND_PROCESS_MODE off)
+MIHOMO_LOG_LEVEL=$(state_file_get "$STATE" MIHOMO_LOG_LEVEL warning)
+MIHOMO_IPV6=$(state_file_get "$STATE" MIHOMO_IPV6 0)
+MIHOMO_STORE_SELECTED=$(state_file_get "$STATE" MIHOMO_STORE_SELECTED 1)
+MIHOMO_STORE_FAKE_IP=$(state_file_get "$STATE" MIHOMO_STORE_FAKE_IP 0)
+MIHOMO_SNIFFER_OVERRIDE=$(sniffer_override_value)
+MIHOMO_SNIFFER_ENABLE=$(state_file_get "$STATE" MIHOMO_SNIFFER_ENABLE 0)
+MIHOMO_SNIFFER_FORCE_DNS_MAPPING=$(state_file_get "$STATE" MIHOMO_SNIFFER_FORCE_DNS_MAPPING 0)
+MIHOMO_SNIFFER_PARSE_PURE_IP=$(state_file_get "$STATE" MIHOMO_SNIFFER_PARSE_PURE_IP 0)
+MIHOMO_SNIFFER_OVERRIDE_DESTINATION=$(state_file_get "$STATE" MIHOMO_SNIFFER_OVERRIDE_DESTINATION 0)
+MIHOMO_SNIFFER_QUIC_PORTS_B64=$(state_file_get "$STATE" MIHOMO_SNIFFER_QUIC_PORTS_B64)
+MIHOMO_SNIFFER_TLS_PORTS_B64=$(state_file_get "$STATE" MIHOMO_SNIFFER_TLS_PORTS_B64)
+MIHOMO_SNIFFER_HTTP_PORTS_B64=$(state_file_get "$STATE" MIHOMO_SNIFFER_HTTP_PORTS_B64 ODAKODA4MC04ODgw)
+MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION=$(state_file_get "$STATE" MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION 1)
+MIHOMO_SNIFFER_FORCE_DOMAIN_B64=$(state_file_get "$STATE" MIHOMO_SNIFFER_FORCE_DOMAIN_B64)
+MIHOMO_SNIFFER_SKIP_DOMAIN_B64=$(state_file_get "$STATE" MIHOMO_SNIFFER_SKIP_DOMAIN_B64)
+MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64=$(state_file_get "$STATE" MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64)
+MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64=$(state_file_get "$STATE" MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64)
+EXTERNAL_UI_PRESET=$(state_file_get "$STATE" EXTERNAL_UI_PRESET zashboard-cdn)
+EXTERNAL_UI_URL_B64=$(state_file_get "$STATE" EXTERNAL_UI_URL_B64)
+EXTERNAL_UI_SECRET_B64=$(state_file_get "$STATE" EXTERNAL_UI_SECRET_B64)
+NETWORK_DISABLE_IPV6=$(state_file_get "$STATE" NETWORK_DISABLE_IPV6 1)
+NETWORK_QDISC=$(state_file_get "$STATE" NETWORK_QDISC fq_codel)
+NETWORK_DISABLE_MULTICAST=$(state_file_get "$STATE" NETWORK_DISABLE_MULTICAST 1)
+NETWORK_CT_ESTABLISHED=$(state_file_get "$STATE" NETWORK_CT_ESTABLISHED 86400)
+NETWORK_CT_SYN_SENT=$(state_file_get "$STATE" NETWORK_CT_SYN_SENT 5)
+NETWORK_CT_SYN_RECV=$(state_file_get "$STATE" NETWORK_CT_SYN_RECV 5)
+NETWORK_CT_FIN_WAIT=$(state_file_get "$STATE" NETWORK_CT_FIN_WAIT 10)
+NETWORK_CT_CLOSE_WAIT=$(state_file_get "$STATE" NETWORK_CT_CLOSE_WAIT 10)
+NETWORK_CT_LAST_ACK=$(state_file_get "$STATE" NETWORK_CT_LAST_ACK 10)
+NETWORK_CT_TIME_WAIT=$(state_file_get "$STATE" NETWORK_CT_TIME_WAIT 10)
+NETWORK_CT_CLOSE=$(state_file_get "$STATE" NETWORK_CT_CLOSE 10)
+NETWORK_CT_UNACKNOWLEDGED=$(state_file_get "$STATE" NETWORK_CT_UNACKNOWLEDGED 300)
+NETWORK_CT_UDP_STREAM=$(state_file_get "$STATE" NETWORK_CT_UDP_STREAM 180)
+EOF
+  mv "$tmp_state" "$STATE"
+}
+
+write_container_settings() {
+  active_id=$(state_file_get "$STATE" ACTIVE_PROFILE_ID "$ACTIVE_PROFILE_ID")
+  run_enabled=$(state_file_get "$STATE" RUN_ENABLED 0)
+  tmp_state="$STATE.tmp.$$"
+  umask 077
+  cat > "$tmp_state" <<EOF
+STATE_VERSION=5
+ACTIVE_PROFILE_ID=$active_id
+RUN_ENABLED=$run_enabled
+GLOBAL_HEADERS_B64=$(b64 "$global_headers")
+LISTENER_MODE=$listener_mode
+REDIR_PORT=$redir_port
+TPROXY_PORT=$tproxy_port
+MIHOMO_FIND_PROCESS_MODE=$mihomo_find_process_mode
+MIHOMO_LOG_LEVEL=$mihomo_log_level
+MIHOMO_IPV6=$mihomo_ipv6
+MIHOMO_STORE_SELECTED=$mihomo_store_selected
+MIHOMO_STORE_FAKE_IP=$mihomo_store_fake_ip
+MIHOMO_SNIFFER_OVERRIDE=$mihomo_sniffer_override
+MIHOMO_SNIFFER_ENABLE=$mihomo_sniffer_enable
+MIHOMO_SNIFFER_FORCE_DNS_MAPPING=$mihomo_sniffer_force_dns_mapping
+MIHOMO_SNIFFER_PARSE_PURE_IP=$mihomo_sniffer_parse_pure_ip
+MIHOMO_SNIFFER_OVERRIDE_DESTINATION=$mihomo_sniffer_override_destination
+MIHOMO_SNIFFER_QUIC_PORTS_B64=$(b64 "$mihomo_sniffer_quic_ports")
+MIHOMO_SNIFFER_TLS_PORTS_B64=$(b64 "$mihomo_sniffer_tls_ports")
+MIHOMO_SNIFFER_HTTP_PORTS_B64=$(b64 "$mihomo_sniffer_http_ports")
+MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION=$mihomo_sniffer_http_override_destination
+MIHOMO_SNIFFER_FORCE_DOMAIN_B64=$(b64 "$mihomo_sniffer_force_domain")
+MIHOMO_SNIFFER_SKIP_DOMAIN_B64=$(b64 "$mihomo_sniffer_skip_domain")
+MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64=$(b64 "$mihomo_sniffer_skip_src_address")
+MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64=$(b64 "$mihomo_sniffer_skip_dst_address")
+EXTERNAL_UI_PRESET=$ui_preset
+EXTERNAL_UI_URL_B64=$(b64 "$ui_url")
+EXTERNAL_UI_SECRET_B64=$(b64 "$ui_secret")
+NETWORK_DISABLE_IPV6=$network_disable_ipv6
+NETWORK_QDISC=$network_qdisc
+NETWORK_DISABLE_MULTICAST=$network_disable_multicast
+NETWORK_CT_ESTABLISHED=$network_ct_established
+NETWORK_CT_SYN_SENT=$network_ct_syn_sent
+NETWORK_CT_SYN_RECV=$network_ct_syn_recv
+NETWORK_CT_FIN_WAIT=$network_ct_fin_wait
+NETWORK_CT_CLOSE_WAIT=$network_ct_close_wait
+NETWORK_CT_LAST_ACK=$network_ct_last_ack
+NETWORK_CT_TIME_WAIT=$network_ct_time_wait
+NETWORK_CT_CLOSE=$network_ct_close
+NETWORK_CT_UNACKNOWLEDGED=$network_ct_unacknowledged
+NETWORK_CT_UDP_STREAM=$network_ct_udp_stream
+EOF
+  mv "$tmp_state" "$STATE"
+}
+
 if [ "${REQUEST_METHOD:-GET}" = GET ]; then
+  view_id="$ACTIVE_PROFILE_ID"
+  case "${QUERY_STRING:-}" in
+    profile_id=*) requested_id=${QUERY_STRING#profile_id=} ; valid_profile_id "$requested_id" && [ -f "$(profile_file "$requested_id")" ] && view_id="$requested_id" ;;
+  esac
+  view_path=$(profile_file "$view_id") || view_path="$PROFILE"
+  view_source="$PROFILES_DIR/$view_id.source.yaml"
+  view_final="$RUNTIME_DIR/$view_id.config.yaml"
+  view_error="$PROFILES_DIR/$view_id.error.txt"
+  view_meta="$PROFILES_DIR/$view_id.source.meta"
+  view_source_present=false
+  view_final_present=false
+  view_updated_at=0
+  [ -s "$view_source" ] && view_source_present=true
+  [ -s "$view_final" ] && view_final_present=true
+  if [ -f "$view_source" ]; then
+    view_updated_at=$(stat -c '%Y' "$view_source" 2>/dev/null || printf '0')
+  fi
   json_headers
-  printf '{"ok":true,"profile":{'
-  printf '"url_b64":"%s",' "$(state_get SUB_URL_B64)"
-  printf '"headers_b64":"%s",' "$(state_get SUB_HEADERS_B64)"
-  printf '"refresh_seconds":%s,' "$(state_get SUB_REFRESH_SECONDS 3600)"
-  printf '"timeout_seconds":%s,' "$(state_get SUB_TIMEOUT_SECONDS 30)"
-  printf '"insecure_tls":%s,' "$(state_get SUB_INSECURE_TLS 0)"
-  printf '"mixed_enabled":%s,' "$(state_get MIXED_ENABLED 1)"
-  printf '"mixed_name_b64":"%s",' "$(b64 "$(state_get MIXED_NAME mixed-in)")"
-  printf '"mixed_port":%s,' "$(state_get MIXED_PORT 7890)"
-  printf '"mixed_listen_b64":"%s",' "$(b64 "$(state_get MIXED_LISTEN 0.0.0.0)")"
-  printf '"mixed_udp":%s,' "$(state_get MIXED_UDP 1)"
-  printf '"mixed_users_b64":"%s"' "$(state_get MIXED_USERS_B64)"
+  printf '{"ok":true,"state":{'
+  printf '"active_profile_id":"%s",' "$(state_file_get "$STATE" ACTIVE_PROFILE_ID "$ACTIVE_PROFILE_ID")"
+  printf '"run_enabled":%s,' "$(state_file_get "$STATE" RUN_ENABLED 0)"
+  printf '"listener_mode":"%s",' "$(state_file_get "$STATE" LISTENER_MODE auto)"
+  printf '"global_headers_b64":"%s",' "$(state_file_get "$STATE" GLOBAL_HEADERS_B64)"
+  printf '"default_user_agent_b64":"%s",' "$(b64 "$(default_mihomo_user_agent)")"
+  printf '"mihomo_find_process_mode":"%s",' "$(state_file_get "$STATE" MIHOMO_FIND_PROCESS_MODE off)"
+  printf '"mihomo_log_level":"%s",' "$(state_file_get "$STATE" MIHOMO_LOG_LEVEL warning)"
+  printf '"mihomo_ipv6":%s,' "$(state_file_get "$STATE" MIHOMO_IPV6 0)"
+  printf '"mihomo_store_selected":%s,' "$(state_file_get "$STATE" MIHOMO_STORE_SELECTED 1)"
+  printf '"mihomo_store_fake_ip":%s,' "$(state_file_get "$STATE" MIHOMO_STORE_FAKE_IP 0)"
+  printf '"mihomo_sniffer_override":%s,' "$(sniffer_override_value)"
+  printf '"mihomo_sniffer_enable":%s,' "$(bool_or "$(state_file_get "$STATE" MIHOMO_SNIFFER_ENABLE 0)" 0)"
+  printf '"mihomo_sniffer_force_dns_mapping":%s,' "$(bool_or "$(state_file_get "$STATE" MIHOMO_SNIFFER_FORCE_DNS_MAPPING 0)" 0)"
+  printf '"mihomo_sniffer_parse_pure_ip":%s,' "$(bool_or "$(state_file_get "$STATE" MIHOMO_SNIFFER_PARSE_PURE_IP 0)" 0)"
+  printf '"mihomo_sniffer_override_destination":%s,' "$(bool_or "$(state_file_get "$STATE" MIHOMO_SNIFFER_OVERRIDE_DESTINATION 0)" 0)"
+  printf '"mihomo_sniffer_quic_ports_b64":"%s",' "$(state_file_get "$STATE" MIHOMO_SNIFFER_QUIC_PORTS_B64)"
+  printf '"mihomo_sniffer_tls_ports_b64":"%s",' "$(state_file_get "$STATE" MIHOMO_SNIFFER_TLS_PORTS_B64)"
+  printf '"mihomo_sniffer_http_ports_b64":"%s",' "$(state_file_get "$STATE" MIHOMO_SNIFFER_HTTP_PORTS_B64 ODAKODA4MC04ODgw)"
+  printf '"mihomo_sniffer_http_override_destination":%s,' "$(bool_or "$(state_file_get "$STATE" MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION 1)" 1)"
+  printf '"mihomo_sniffer_force_domain_b64":"%s",' "$(state_file_get "$STATE" MIHOMO_SNIFFER_FORCE_DOMAIN_B64)"
+  printf '"mihomo_sniffer_skip_domain_b64":"%s",' "$(state_file_get "$STATE" MIHOMO_SNIFFER_SKIP_DOMAIN_B64)"
+  printf '"mihomo_sniffer_skip_src_address_b64":"%s",' "$(state_file_get "$STATE" MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64)"
+  printf '"mihomo_sniffer_skip_dst_address_b64":"%s",' "$(state_file_get "$STATE" MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64)"
+  ui_preset=$(state_file_get "$STATE" EXTERNAL_UI_PRESET zashboard-cdn)
+  ui_url_b64=$(state_file_get "$STATE" EXTERNAL_UI_URL_B64)
+  printf '"redir_port":%s,' "$(state_file_get "$STATE" REDIR_PORT 12345)"
+  printf '"tproxy_port":%s,' "$(state_file_get "$STATE" TPROXY_PORT 12346)"
+  printf '"external_ui_preset":"%s",' "$ui_preset"
+  printf '"external_ui_url_b64":"%s",' "$ui_url_b64"
+  printf '"external_ui_effective_url_b64":"%s",' "$(b64 "$(external_ui_url "$ui_preset" "$ui_url_b64" 2>/dev/null || true)")"
+  printf '"external_ui_secret_b64":"%s",' "$(state_file_get "$STATE" EXTERNAL_UI_SECRET_B64)"
+  printf '"network_disable_ipv6":%s,' "$(state_file_get "$STATE" NETWORK_DISABLE_IPV6 1)"
+  printf '"network_qdisc":"%s",' "$(state_file_get "$STATE" NETWORK_QDISC fq_codel)"
+  printf '"network_disable_multicast":%s,' "$(state_file_get "$STATE" NETWORK_DISABLE_MULTICAST 1)"
+  printf '"network_ct_established":%s,' "$(state_file_get "$STATE" NETWORK_CT_ESTABLISHED 86400)"
+  printf '"network_ct_syn_sent":%s,' "$(state_file_get "$STATE" NETWORK_CT_SYN_SENT 5)"
+  printf '"network_ct_syn_recv":%s,' "$(state_file_get "$STATE" NETWORK_CT_SYN_RECV 5)"
+  printf '"network_ct_fin_wait":%s,' "$(state_file_get "$STATE" NETWORK_CT_FIN_WAIT 10)"
+  printf '"network_ct_close_wait":%s,' "$(state_file_get "$STATE" NETWORK_CT_CLOSE_WAIT 10)"
+  printf '"network_ct_last_ack":%s,' "$(state_file_get "$STATE" NETWORK_CT_LAST_ACK 10)"
+  printf '"network_ct_time_wait":%s,' "$(state_file_get "$STATE" NETWORK_CT_TIME_WAIT 10)"
+  printf '"network_ct_close":%s,' "$(state_file_get "$STATE" NETWORK_CT_CLOSE 10)"
+  printf '"network_ct_unacknowledged":%s,' "$(state_file_get "$STATE" NETWORK_CT_UNACKNOWLEDGED 300)"
+  printf '"network_ct_udp_stream":%s' "$(state_file_get "$STATE" NETWORK_CT_UDP_STREAM 180)"
+  printf '},"profiles":['
+  profiles_json
+  printf '],"profile":{'
+  printf '"id":"%s",' "$view_id"
+  printf '"name_b64":"%s",' "$(state_file_get "$view_path" NAME_B64 "$(b64 "$view_id")")"
+  printf '"display_name_b64":"%s",' "$(profile_effective_name_b64 "$view_path" "$view_meta")"
+  printf '"url_b64":"%s",' "$(state_file_get "$view_path" SUB_URL_B64)"
+  printf '"headers_b64":"%s",' "$(state_file_get "$view_path" SUB_HEADERS_B64)"
+  printf '"local_override_enabled":%s,' "$(profile_local_override_enabled "$view_path")"
+  printf '"local_override_b64":"%s",' "$(state_file_get "$view_path" LOCAL_OVERRIDE_B64)"
+  printf '"local_find_process_mode":"%s",' "$(state_file_get "$view_path" LOCAL_FIND_PROCESS_MODE inherit)"
+  printf '"local_log_level":"%s",' "$(state_file_get "$view_path" LOCAL_LOG_LEVEL inherit)"
+  printf '"local_ipv6":"%s",' "$(state_file_get "$view_path" LOCAL_IPV6 inherit)"
+  printf '"local_store_selected":"%s",' "$(state_file_get "$view_path" LOCAL_STORE_SELECTED inherit)"
+  printf '"local_store_fake_ip":"%s",' "$(state_file_get "$view_path" LOCAL_STORE_FAKE_IP inherit)"
+  printf '"local_sniffer_mode":"%s",' "$(state_file_get "$view_path" LOCAL_SNIFFER_MODE inherit)"
+  printf '"use_provider_title":%s,' "$(bool_or "$(state_file_get "$view_path" SUB_USE_PROVIDER_TITLE 1)" 1)"
+  printf '"use_provider_interval":%s,' "$(bool_or "$(state_file_get "$view_path" SUB_USE_PROVIDER_INTERVAL 1)" 1)"
+  printf '"refresh_seconds":%s,' "$(number_or "$(state_file_get "$view_path" SUB_REFRESH_SECONDS 3600)" 3600)"
+  printf '"effective_refresh_seconds":%s,' "$(profile_effective_refresh "$view_path" "$view_meta")"
+  printf '"timeout_seconds":%s,' "$(number_or "$(state_file_get "$view_path" SUB_TIMEOUT_SECONDS 30)" 30)"
+  printf '"insecure_tls":%s,' "$(bool_or "$(state_file_get "$view_path" SUB_INSECURE_TLS 0)" 0)"
+  printf '"provider_title_b64":"%s",' "$(profile_meta_get "$view_meta" provider_title_b64)"
+  printf '"provider_refresh_seconds":%s,' "$(number_or "$(profile_meta_get "$view_meta" provider_refresh_seconds)" 0)"
+  printf '"subscription_userinfo_b64":"%s",' "$(profile_meta_get "$view_meta" subscription_userinfo_b64)"
+  printf '"profile_web_page_url_b64":"%s",' "$(profile_meta_get "$view_meta" profile_web_page_url_b64)"
+  printf '"support_url_b64":"%s",' "$(profile_meta_get "$view_meta" support_url_b64)"
+  printf '"subscription_refill_date_b64":"%s",' "$(profile_meta_get "$view_meta" subscription_refill_date_b64)"
+  printf '"announce_b64":"%s",' "$(profile_meta_get "$view_meta" announce_b64)"
+  printf '"source_present":%s,' "$view_source_present"
+  printf '"final_present":%s,' "$view_final_present"
+  printf '"updated_at":%s,' "$view_updated_at"
+  printf '"error_b64":"%s"' "$(b64 "$(cat "$view_error" 2>/dev/null || true)")"
   printf '}}\n'
   exit 0
 fi
 
 require_post
 load_form
+action=$(form_value action)
+
+case "$action" in
+  start|stop)
+    active_id=$(state_file_get "$STATE" ACTIVE_PROFILE_ID "$ACTIVE_PROFILE_ID")
+    if [ "$action" = start ]; then
+      active_path=$(profile_file "$active_id") || deny 'invalid active profile'
+      [ -n "$(state_file_get "$active_path" SUB_URL_B64)" ] || deny 'Subscription URL is not configured'
+      run_enabled=1
+    else
+      run_enabled=0
+    fi
+    write_state "$active_id" "$run_enabled"
+    kill -USR1 1 2>/dev/null || true
+    json_headers
+    printf '{"ok":true,"action":"%s"}\n' "$action"
+    exit 0
+    ;;
+  select)
+    target_id=$(form_value profile_id)
+    profile_path=$(profile_file "$target_id") || deny 'invalid profile id'
+    [ -f "$profile_path" ] || deny 'profile not found'
+    write_state "$target_id" "$(state_file_get "$STATE" RUN_ENABLED 0)"
+    kill -USR1 1 2>/dev/null || true
+    json_headers
+    printf '{"ok":true,"selected":"%s"}\n' "$target_id"
+    exit 0
+    ;;
+  create)
+    name=$(form_value name)
+    [ -n "$name" ] || name='Новая подписка'
+    clean_name=$(printf '%s' "$name" | tr -d '\r\n')
+    [ "$clean_name" = "$name" ] || deny 'Profile name must be one line'
+    [ "${#name}" -le 80 ] || deny 'Profile name is too long'
+    profile_id="p-$(date +%s)"
+    profile_path=$(profile_file "$profile_id") || deny 'could not create profile id'
+    suffix=1
+    while [ -e "$profile_path" ]; do
+      profile_id="p-$(date +%s)-$suffix"
+      profile_path=$(profile_file "$profile_id") || deny 'could not create profile id'
+      suffix=$((suffix + 1))
+    done
+    umask 077
+    cat > "$profile_path" <<EOF
+PROFILE_VERSION=2
+NAME_B64=$(b64 "$name")
+SUB_URL_B64=
+SUB_HEADERS_B64=
+LOCAL_OVERRIDE_ENABLED=0
+LOCAL_OVERRIDE_B64=
+LOCAL_FIND_PROCESS_MODE=inherit
+LOCAL_LOG_LEVEL=inherit
+LOCAL_IPV6=inherit
+LOCAL_STORE_SELECTED=inherit
+LOCAL_STORE_FAKE_IP=inherit
+LOCAL_SNIFFER_MODE=inherit
+SUB_USE_PROVIDER_TITLE=1
+SUB_USE_PROVIDER_INTERVAL=1
+SUB_REFRESH_SECONDS=3600
+SUB_TIMEOUT_SECONDS=30
+SUB_INSECURE_TLS=0
+EOF
+    json_headers
+    printf '{"ok":true,"created":"%s"}\n' "$profile_id"
+    exit 0
+    ;;
+  delete)
+    target_id=$(form_value profile_id)
+    profile_path=$(profile_file "$target_id") || deny 'invalid profile id'
+    [ -f "$profile_path" ] || deny 'profile not found'
+    active_id=$(state_file_get "$STATE" ACTIVE_PROFILE_ID "$ACTIVE_PROFILE_ID")
+    [ "$target_id" != "$active_id" ] || deny 'active profile cannot be deleted'
+    rm -f \
+      "$profile_path" \
+      "$PROFILES_DIR/$target_id.source.yaml" \
+      "$PROFILES_DIR/$target_id.source.meta" \
+      "$PROFILES_DIR/$target_id.error.txt" \
+      "$RUNTIME_DIR/$target_id.config.yaml"
+    json_headers
+    printf '{"ok":true,"deleted":"%s"}\n' "$target_id"
+    exit 0
+    ;;
+  save-settings)
+    global_headers=$(form_value global_headers)
+    listener_mode=$(form_value listener_mode)
+    redir_port=$(form_value redir_port)
+    tproxy_port=$(form_value tproxy_port)
+    ui_preset=$(form_value external_ui_preset)
+    ui_url=$(form_value external_ui_url)
+    ui_secret=$(form_value external_ui_secret)
+    mihomo_find_process_mode=$(form_value mihomo_find_process_mode)
+    mihomo_log_level=$(form_value mihomo_log_level)
+    mihomo_ipv6=$(form_value mihomo_ipv6)
+    mihomo_store_selected=$(form_value mihomo_store_selected)
+    mihomo_store_fake_ip=$(form_value mihomo_store_fake_ip)
+    mihomo_sniffer_override=$(form_value mihomo_sniffer_override)
+    mihomo_sniffer_enable=$(form_value mihomo_sniffer_enable)
+    mihomo_sniffer_force_dns_mapping=$(form_value mihomo_sniffer_force_dns_mapping)
+    mihomo_sniffer_parse_pure_ip=$(form_value mihomo_sniffer_parse_pure_ip)
+    mihomo_sniffer_override_destination=$(form_value mihomo_sniffer_override_destination)
+    mihomo_sniffer_quic_ports=$(form_value mihomo_sniffer_quic_ports)
+    mihomo_sniffer_tls_ports=$(form_value mihomo_sniffer_tls_ports)
+    mihomo_sniffer_http_ports=$(form_value mihomo_sniffer_http_ports)
+    mihomo_sniffer_http_override_destination=$(form_value mihomo_sniffer_http_override_destination)
+    mihomo_sniffer_force_domain=$(form_value mihomo_sniffer_force_domain)
+    mihomo_sniffer_skip_domain=$(form_value mihomo_sniffer_skip_domain)
+    mihomo_sniffer_skip_src_address=$(form_value mihomo_sniffer_skip_src_address)
+    mihomo_sniffer_skip_dst_address=$(form_value mihomo_sniffer_skip_dst_address)
+    network_disable_ipv6=$(form_value network_disable_ipv6)
+    network_qdisc=$(form_value network_qdisc)
+    network_disable_multicast=$(form_value network_disable_multicast)
+    network_ct_established=$(form_value network_ct_established)
+    network_ct_syn_sent=$(form_value network_ct_syn_sent)
+    network_ct_syn_recv=$(form_value network_ct_syn_recv)
+    network_ct_fin_wait=$(form_value network_ct_fin_wait)
+    network_ct_close_wait=$(form_value network_ct_close_wait)
+    network_ct_last_ack=$(form_value network_ct_last_ack)
+    network_ct_time_wait=$(form_value network_ct_time_wait)
+    network_ct_close=$(form_value network_ct_close)
+    network_ct_unacknowledged=$(form_value network_ct_unacknowledged)
+    network_ct_udp_stream=$(form_value network_ct_udp_stream)
+    global_headers=$(printf '%s' "$global_headers" | tr -d '\r')
+    [ "${#global_headers}" -le 16384 ] || deny 'Global headers are too large'
+    valid_header_block "$global_headers" || deny 'Global headers contain an invalid or duplicate name'
+    case "$listener_mode" in auto|redir-tun|redir-tproxy|tproxy) ;; *) deny 'invalid listener mode' ;; esac
+    valid_number "$redir_port" && [ "$redir_port" -ge 1 ] && [ "$redir_port" -le 65535 ] || deny 'REDIR port must be 1..65535'
+    valid_number "$tproxy_port" && [ "$tproxy_port" -ge 1 ] && [ "$tproxy_port" -le 65535 ] || deny 'TPROXY port must be 1..65535'
+    combined_ports=0
+    [ "$listener_mode" = redir-tproxy ] && combined_ports=1
+    if [ "$listener_mode" = auto ] && grep -q '^nf_tables ' /proc/modules 2>/dev/null; then combined_ports=1; fi
+    [ "$combined_ports" = 0 ] || [ "$redir_port" != "$tproxy_port" ] || deny 'REDIR and TPROXY ports must be different in combined mode'
+    case "$ui_preset" in zashboard|zashboard-cdn|metacubexd|yacd-meta|custom) ;; *) deny 'invalid Mihomo panel preset' ;; esac
+    ui_url=$(printf '%s' "$ui_url" | tr -d '\r\n')
+    [ "${#ui_url}" -le 2048 ] || deny 'Mihomo panel URL is too long'
+    if [ "$ui_preset" = custom ]; then
+      case "$ui_url" in http://*|https://*) ;; *) deny 'Mihomo panel URL must use http(s)' ;; esac
+    fi
+    clean_secret=$(printf '%s' "$ui_secret" | tr -d '\r\n')
+    [ "$clean_secret" = "$ui_secret" ] || deny 'Mihomo panel password must be one line'
+    [ "${#ui_secret}" -le 512 ] || deny 'Mihomo panel password is too long'
+    case "$mihomo_find_process_mode" in off|strict|always) ;; *) deny 'invalid find-process-mode' ;; esac
+    case "$mihomo_log_level" in silent|error|warning|info|debug) ;; *) deny 'invalid log-level' ;; esac
+    case "$mihomo_ipv6:$mihomo_store_selected:$mihomo_store_fake_ip" in [01]:[01]:[01]) ;; *) deny 'invalid Mihomo switches' ;; esac
+    case "$mihomo_sniffer_override:$mihomo_sniffer_enable:$mihomo_sniffer_force_dns_mapping:$mihomo_sniffer_parse_pure_ip:$mihomo_sniffer_override_destination:$mihomo_sniffer_http_override_destination" in
+      [01]:[01]:[01]:[01]:[01]:[01]) ;;
+      *) deny 'invalid sniffer switches' ;;
+    esac
+    mihomo_sniffer_quic_ports=$(printf '%s' "$mihomo_sniffer_quic_ports" | tr -d '\r')
+    mihomo_sniffer_tls_ports=$(printf '%s' "$mihomo_sniffer_tls_ports" | tr -d '\r')
+    mihomo_sniffer_http_ports=$(printf '%s' "$mihomo_sniffer_http_ports" | tr -d '\r')
+    mihomo_sniffer_force_domain=$(printf '%s' "$mihomo_sniffer_force_domain" | tr -d '\r')
+    mihomo_sniffer_skip_domain=$(printf '%s' "$mihomo_sniffer_skip_domain" | tr -d '\r')
+    mihomo_sniffer_skip_src_address=$(printf '%s' "$mihomo_sniffer_skip_src_address" | tr -d '\r')
+    mihomo_sniffer_skip_dst_address=$(printf '%s' "$mihomo_sniffer_skip_dst_address" | tr -d '\r')
+    [ "${#mihomo_sniffer_quic_ports}" -le 4096 ] && [ "${#mihomo_sniffer_tls_ports}" -le 4096 ] && [ "${#mihomo_sniffer_http_ports}" -le 4096 ] || deny 'Sniffer port list is too large'
+    valid_port_block "$mihomo_sniffer_quic_ports" && valid_port_block "$mihomo_sniffer_tls_ports" && valid_port_block "$mihomo_sniffer_http_ports" || deny 'Sniffer ports must be 1..65535 or ranges'
+    [ "${#mihomo_sniffer_force_domain}" -le 16384 ] && [ "${#mihomo_sniffer_skip_domain}" -le 16384 ] && [ "${#mihomo_sniffer_skip_src_address}" -le 16384 ] && [ "${#mihomo_sniffer_skip_dst_address}" -le 16384 ] || deny 'Sniffer list is too large'
+    case "$network_disable_ipv6:$network_disable_multicast" in [01]:[01]) ;; *) deny 'invalid Alpine network switches' ;; esac
+    case "$network_qdisc" in fq_codel|cake|codel|sfq|pfifo|bfifo|system) ;; *) deny 'invalid qdisc mode' ;; esac
+    for network_timeout in "$network_ct_established" "$network_ct_syn_sent" "$network_ct_syn_recv" "$network_ct_fin_wait" "$network_ct_close_wait" "$network_ct_last_ack" "$network_ct_time_wait" "$network_ct_close" "$network_ct_unacknowledged" "$network_ct_udp_stream"; do
+      valid_number "$network_timeout" && [ "$network_timeout" -ge 1 ] && [ "$network_timeout" -le 604800 ] || deny 'conntrack timeouts must be 1..604800 seconds'
+    done
+    write_container_settings
+    kill -USR1 1 2>/dev/null || true
+    json_headers
+    printf '{"ok":true,"action":"save-settings"}\n'
+    exit 0
+    ;;
+esac
+
+target_id=$(form_value profile_id)
+active_id=$(state_file_get "$STATE" ACTIVE_PROFILE_ID "$ACTIVE_PROFILE_ID")
+[ -n "$target_id" ] || target_id="$active_id"
+target_path=$(profile_file "$target_id") || deny 'invalid profile id'
+[ -f "$target_path" ] || deny 'profile not found'
 url=$(form_value url)
+name=$(form_value name)
 headers=$(form_value headers)
+local_override_enabled=$(form_value local_override_enabled)
+local_override=$(form_value local_override)
+local_find_process_mode=$(form_value local_find_process_mode)
+local_log_level=$(form_value local_log_level)
+local_ipv6=$(form_value local_ipv6)
+local_store_selected=$(form_value local_store_selected)
+local_store_fake_ip=$(form_value local_store_fake_ip)
+local_sniffer_mode=$(form_value local_sniffer_mode)
+use_provider_title=$(form_value use_provider_title)
+use_provider_interval=$(form_value use_provider_interval)
 refresh=$(form_value refresh_seconds)
 timeout=$(form_value timeout_seconds)
 insecure=$(form_value insecure_tls)
-mixed_enabled=$(form_value mixed_enabled)
-mixed_name=$(form_value mixed_name)
-mixed_port=$(form_value mixed_port)
-mixed_listen=$(form_value mixed_listen)
-mixed_udp=$(form_value mixed_udp)
-mixed_users=$(form_value mixed_users)
 
 case "$url" in ''|http://*|https://*) ;; *) deny 'URL must use http(s)' ;; esac
+clean_url=$(printf '%s' "$url" | tr -d '\r\n')
+[ "$clean_url" = "$url" ] || deny 'URL must be one line'
+[ "${#url}" -le 4096 ] || deny 'URL is too long'
 valid_number "$refresh" && [ "$refresh" -ge 30 ] && [ "$refresh" -le 86400 ] || deny 'Refresh interval must be 30..86400 seconds'
 valid_number "$timeout" && [ "$timeout" -ge 3 ] && [ "$timeout" -le 120 ] || deny 'Timeout must be 3..120 seconds'
 case "$insecure" in 0|1) ;; *) insecure=0 ;; esac
-case "$mixed_enabled" in 0|1) ;; *) mixed_enabled=0 ;; esac
-case "$mixed_udp" in 0|1) ;; *) mixed_udp=0 ;; esac
-mixed_name=$(printf '%s' "$mixed_name" | tr -cd 'A-Za-z0-9_-')
-[ -n "$mixed_name" ] || mixed_name=mixed-in
-valid_number "$mixed_port" && [ "$mixed_port" -ge 1 ] && [ "$mixed_port" -le 65535 ] || deny 'Listener port must be 1..65535'
-case "$mixed_listen" in *[!0-9A-Fa-f:.]*|'') deny 'Listener address is invalid' ;; esac
+case "$local_override_enabled:$use_provider_title:$use_provider_interval" in [01]:[01]:[01]) ;; *) deny 'invalid local override switches' ;; esac
+case "$local_find_process_mode" in inherit|off|strict|always) ;; *) deny 'invalid local find-process-mode' ;; esac
+case "$local_log_level" in inherit|silent|error|warning|info|debug) ;; *) deny 'invalid local log-level' ;; esac
+case "$local_ipv6" in inherit|0|1) ;; *) deny 'invalid local IPv6 mode' ;; esac
+case "$local_store_selected" in inherit|0|1) ;; *) deny 'invalid local store-selected mode' ;; esac
+case "$local_store_fake_ip" in inherit|0|1) ;; *) deny 'invalid local store-fake-ip mode' ;; esac
+case "$local_sniffer_mode" in inherit|source|disabled) ;; *) deny 'invalid local sniffer mode' ;; esac
 clean_headers=$(printf '%s' "$headers" | tr -d '\r')
 [ "$clean_headers" = "$headers" ] || deny 'Headers must not contain CR'
-mixed_users=$(printf '%s' "$mixed_users" | tr -d '\r')
+[ "${#headers}" -le 16384 ] || deny 'Headers are too large'
+valid_header_block "$headers" || deny 'Headers contain an invalid or duplicate name'
+local_override=$(printf '%s' "$local_override" | tr -d '\r')
+[ -n "$name" ] || name="$target_id"
+clean_name=$(printf '%s' "$name" | tr -d '\r\n')
+[ "$clean_name" = "$name" ] || deny 'Profile name must be one line'
+[ "${#name}" -le 80 ] || deny 'Profile name is too long'
 
-tmp="$PROFILE.tmp.$$"
+tmp="$target_path.tmp.$$"
 umask 077
 cat > "$tmp" <<EOF
-PROFILE_VERSION=1
+PROFILE_VERSION=2
+NAME_B64=$(b64 "$name")
 SUB_URL_B64=$(b64 "$url")
 SUB_HEADERS_B64=$(b64 "$headers")
+LOCAL_OVERRIDE_ENABLED=$local_override_enabled
+LOCAL_OVERRIDE_B64=$(b64 "$local_override")
+LOCAL_FIND_PROCESS_MODE=$local_find_process_mode
+LOCAL_LOG_LEVEL=$local_log_level
+LOCAL_IPV6=$local_ipv6
+LOCAL_STORE_SELECTED=$local_store_selected
+LOCAL_STORE_FAKE_IP=$local_store_fake_ip
+LOCAL_SNIFFER_MODE=$local_sniffer_mode
+SUB_USE_PROVIDER_TITLE=$use_provider_title
+SUB_USE_PROVIDER_INTERVAL=$use_provider_interval
 SUB_REFRESH_SECONDS=$refresh
 SUB_TIMEOUT_SECONDS=$timeout
 SUB_INSECURE_TLS=$insecure
-MIXED_ENABLED=$mixed_enabled
-MIXED_NAME=$mixed_name
-MIXED_PORT=$mixed_port
-MIXED_LISTEN=$mixed_listen
-MIXED_UDP=$mixed_udp
-MIXED_USERS_B64=$(b64 "$mixed_users")
 EOF
-mv "$tmp" "$PROFILE"
-kill -USR1 1 2>/dev/null || true
+mv "$tmp" "$target_path"
+[ "$target_id" = "$active_id" ] && kill -USR1 1 2>/dev/null || true
 json_headers
 printf '{"ok":true,"reload":true}\n'

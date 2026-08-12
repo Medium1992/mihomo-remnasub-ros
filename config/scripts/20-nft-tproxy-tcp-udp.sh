@@ -1,16 +1,19 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────
 #  Режим: TProxy(tcp+udp) через nftables. Весь форвард-трафик с входящего
-#  интерфейса прозрачно заворачивается в листенер `tproxy-in` (12346).
+#  интерфейса прозрачно заворачивается в листенер `tproxy-in`.
 #  PRE: можно сразу — TUN не нужен. Включи: переименуй в *.sh.
 #  Порядок: сначала nft, потом policy-routing — если nft нет, выходим до роутинга.
 # ─────────────────────────────────────────────────────────────
 set -e
 
-IFACE="$(ip -o link show | awk -F': ' '/link\/ether/ {print $2}' | cut -d'@' -f1 | head -n1)"
+IFACE=${ROUTE_IFACE:-}
+[ -n "$IFACE" ] && ip link show dev "$IFACE" >/dev/null 2>&1 || \
+  IFACE="$(ip -o link show up | awk -F': ' '/link\/ether/ {gsub(/@.*$/, "", $2); if ($2 != "lo" && $2 != "Meta" && $2 !~ /^hs5t/) {print $2; exit}}')"
+[ -n "$IFACE" ] || { echo "[route] входящий Ethernet-интерфейс не найден"; exit 1; }
 IFACE_CIDR="$(ip -4 -o addr show dev "$IFACE" scope global | awk '{print $4; exit}')"
 [ -n "$IFACE_CIDR" ] || IFACE_CIDR="127.0.0.1/32"
-PORT=12346; MARK=1; RT=100
+PORT=${TPROXY_PORT:-12346}; MARK=1; RT=100
 
 # === nftables: чистка + правила (если nft нет — упадёт здесь, до роутинга) ===
 nft delete table inet mihomo 2>/dev/null || true

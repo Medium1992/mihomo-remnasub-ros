@@ -14,7 +14,7 @@ TPROXY=12346; TUN=Meta; TUN_GW=100.64.0.1; MARK=1; RT=100; RT_TUN=110
 
 # === nftables: чистка + tproxy tcp (если nft нет — упадёт здесь, до роутинга) ===
 nft delete table inet mihomo 2>/dev/null || true
-nft delete table inet forward 2>/dev/null || true
+nft delete table inet mihomo_forward 2>/dev/null || true
 nft add table inet mihomo
 nft add chain inet mihomo pre "{ type filter hook prerouting priority filter; policy accept; }"
 nft add rule inet mihomo pre meta iifname != "$IFACE" return
@@ -42,11 +42,11 @@ ip route replace default via $TUN_GW dev $TUN table $RT_TUN
 
 # === forward-фаервол (в самом конце): дропаем ВЕСЬ форвард, кроме
 #     established/related и udp, уходящего в TUN ===
-nft add table inet forward
-nft add chain inet forward forward "{ type filter hook forward priority filter; policy drop; }"
-nft add rule inet forward forward ct state { established, related, untracked } accept
-nft add rule inet forward forward ct state invalid drop
-nft add rule inet forward forward iifname "$IFACE" oifname "$TUN" meta l4proto udp accept
+nft add table inet mihomo_forward
+nft add chain inet mihomo_forward forward "{ type filter hook forward priority filter; policy drop; }"
+nft add rule inet mihomo_forward forward ct state { established, related, untracked } accept
+nft add rule inet mihomo_forward forward ct state invalid drop
+nft add rule inet mihomo_forward forward iifname "$IFACE" oifname "$TUN" meta l4proto udp accept
 sysctl -w net.ipv4.ip_forward=1 2>/dev/null || true
 
 echo "[route] TProxy(tcp)->$TPROXY + TUN(udp)->$TUN on $IFACE"

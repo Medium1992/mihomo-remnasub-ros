@@ -4,83 +4,301 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#191e24">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta name="referrer" content="same-origin">
   <title>RemnaSub RoS</title>
-  <link rel="stylesheet" href="/assets/remna.css">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/remna.css">
 </head>
 <body>
-  <div class="app-shell">
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 11 9-8 9 8v9a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12.8 2.5 8.1 4.4a1.2 1.2 0 0 1 0 2.1l-8.1 4.4a1.7 1.7 0 0 1-1.6 0L3.1 9a1.2 1.2 0 0 1 0-2.1l8.1-4.4a1.7 1.7 0 0 1 1.6 0Z"/><path d="m3.7 12.8 7.5 4.1a1.7 1.7 0 0 0 1.6 0l7.5-4.1M3.7 17l7.5 4.1a1.7 1.7 0 0 0 1.6 0l7.5-4.1"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m7 8 4 4-4 4M13 16h4"/><rect width="18" height="16" x="3" y="4" rx="2"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.2a2 2 0 0 1-2 0L6.2 6a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.8v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.2a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.2a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.8l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.2a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/></symbol>
+    <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18l-6-4-6 4Z"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h6"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.5 2.2 18a2 2 0 0 0 1.7 3h16.2a2 2 0 0 0 1.7-3L13.7 3.5a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect width="16" height="11" x="4" y="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.7"/></symbol>
+    <symbol id="i-network" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="6" rx="1"/><rect x="14" y="15" width="7" height="6" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/><path d="M6.5 9v3h11v3M6.5 12v3"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
+  </svg>
+
+  <div class="app">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">R</span><span>RemnaSub <b>RoS</b></span></div>
-      <nav aria-label="Разделы">
-        <button class="nav-item active" data-view="overview">Обзор</button>
-        <button class="nav-item" data-view="subscription">Подписка</button>
-        <button class="nav-item" data-view="listener">Входящий порт</button>
-        <button class="nav-item" data-view="config">Конфигурация</button>
+      <div class="brand"><span class="brand-icon">R</span><span><b>RemnaSub</b><small>RoS</small></span></div>
+      <nav class="main-nav" aria-label="Разделы">
+        <button class="active" type="button" data-page-link="dashboard"><svg><use href="#i-home"/></svg><span>Управление</span></button>
+        <button type="button" data-page-link="subscriptions"><svg><use href="#i-layers"/></svg><span>Подписки</span><em id="nav-profile-count">0</em></button>
+        <button type="button" data-page-link="settings"><svg><use href="#i-settings"/></svg><span>Настройки</span></button>
       </nav>
-      <div class="sidebar-note">Полный YAML-профиль Remnawave с локальными настройками контейнера.</div>
+      <div class="sidebar-spacer"></div>
+      <section class="sidebar-core">
+        <div><i id="sidebar-core-dot"></i><strong id="sidebar-core-title">Mihomo остановлен</strong></div>
+        <p id="sidebar-active-profile">Профиль не выбран</p>
+        <button type="button" data-open-mihomo><svg><use href="#i-terminal"/></svg><span>Панель Mihomo</span><svg><use href="#i-external"/></svg></button>
+      </section>
     </aside>
 
-    <main>
-      <header class="topbar">
-        <div><p class="eyebrow">Mihomo profile runtime</p><h1 id="view-title">Обзор</h1></div>
-        <div class="runtime-status" id="runtime-status" aria-live="polite"><i></i><span>Проверяю состояние</span></div>
-      </header>
+    <main class="main">
+      <section class="page active" data-page="dashboard">
+        <header class="control-bar"><div><h1>Управление</h1><p>Активный профиль Mihomo</p></div><button class="round-button" type="button" data-open-mihomo title="Панель Mihomo"><svg><use href="#i-external"/></svg></button></header>
+        <div class="page-scroll">
+          <div class="content narrow">
+            <div class="section-heading"><span>Активная подписка</span></div>
+            <section class="base-container active-card">
+              <div class="active-summary">
+                <span class="subscription-icon"><svg><use href="#i-bookmark"/></svg></span>
+                <div><h2 id="dashboard-profile-name">Подписка не выбрана</h2><p id="dashboard-profile-url">Добавьте подписку, чтобы запустить Mihomo.</p></div>
+                <span class="state-pill idle" id="dashboard-runtime-chip"><i></i>Остановлено</span>
+              </div>
+              <label class="setting-row profile-select-row"><span><b>Профиль</b><small>Конфигурация для запуска</small></span><select id="dashboard-profile-select"></select></label>
+              <div class="setting-row power-row"><span><b>Ядро Mihomo</b><small id="dashboard-power-note">Остановлено</small></span><button class="primary-button" id="dashboard-power" type="button"><svg><use href="#i-power"/></svg><span>Запустить</span></button></div>
+            </section>
 
-      <section class="view active" id="overview">
-        <div class="overview-grid">
-          <article class="status-panel">
-            <p class="section-kicker">Состояние</p>
-            <h2 id="state-headline">Ожидание профиля</h2>
-            <p id="state-description">Укажите URL полной YAML-подписки. После сохранения контейнер загрузит и проверит её.</p>
-            <dl class="facts">
-              <div><dt>Исходный YAML</dt><dd id="source-state">нет</dd></div>
-              <div><dt>Рабочая конфигурация</dt><dd id="final-state">нет</dd></div>
-              <div><dt>Mihomo</dt><dd id="mihomo-state">не запущен</dd></div>
-            </dl>
-            <p class="error-message hidden" id="error-message"></p>
-          </article>
-          <article class="refresh-panel">
-            <p class="section-kicker">Управление</p>
-            <h2>Обновить профиль</h2>
-            <p>Скачивает YAML заново, применяет локальные listeners и перезапускает Mihomo только при валидной итоговой конфигурации.</p>
-            <button class="button primary" id="refresh-button">Обновить сейчас</button>
-            <pre class="meta" id="profile-meta">Метаданных пока нет.</pre>
-          </article>
+            <div class="section-heading"><span>Состояние</span></div>
+            <section class="settings-grid">
+              <div class="setting-row"><span><b>Источник</b><small>Последняя загрузка YAML</small></span><strong id="dashboard-source-state">Нет данных</strong></div>
+              <div class="setting-row"><span><b>Конфигурация</b><small>Результат локальных override</small></span><strong id="dashboard-config-state">Не собрана</strong></div>
+              <div class="setting-row"><span><b>Маршрутизация</b><small>Режим перехвата трафика</small></span><strong id="dashboard-route-mode">Автоматически</strong></div>
+            </section>
+            <details class="collapse-block dashboard-yaml" id="dashboard-yaml-details">
+              <summary><span>Рабочий YAML<small>Итоговая конфигурация активной подписки со всеми переопределениями</small></span><svg><use href="#i-chevron"/></svg></summary>
+              <div class="config-toolbar"><span>Только чтение</span><button class="icon-button" type="button" id="copy-dashboard-yaml" title="Копировать рабочий YAML"><svg><use href="#i-copy"/></svg></button></div>
+              <textarea class="config-viewer" id="dashboard-yaml" readonly spellcheck="false" aria-label="Рабочий YAML">Файл ещё не создан.</textarea>
+            </details>
+            <div class="inline-alert hidden" id="dashboard-error" role="alert"></div>
+          </div>
         </div>
       </section>
 
-      <section class="view" id="subscription">
-        <div class="page-intro"><p class="section-kicker">Источник</p><h2>Подписка Remnawave</h2><p>Подписка используется как полный конфиг Mihomo. Секции из неё сохраняются, а локальный listener управляется ниже отдельно.</p></div>
-        <div class="form-layout">
-          <label class="field full"><span>URL YAML-подписки</span><input id="sub-url" type="url" inputmode="url" placeholder="https://panel.example/sub/..." autocomplete="off"></label>
-          <label class="field full"><span>Дополнительные HTTP-заголовки</span><textarea id="sub-headers" rows="5" spellcheck="false" placeholder="Authorization: Bearer ...&#10;User-Agent: ..."></textarea><small>По одному заголовку в строке. Заголовки хранятся только в локальном профиле контейнера.</small></label>
-          <label class="field"><span>Интервал обновления, сек.</span><input id="sub-refresh" type="number" min="30" max="86400" step="1"></label>
-          <label class="field"><span>Таймаут загрузки, сек.</span><input id="sub-timeout" type="number" min="3" max="120" step="1"></label>
-          <label class="switch-field full"><input id="sub-insecure" type="checkbox"><span class="switch"></span><span><b>Не проверять TLS-сертификат источника</b><small>Оставляйте выключенным, кроме заведомо доверенного источника с нестандартным сертификатом.</small></span></label>
+      <section class="page" data-page="subscriptions">
+        <header class="control-bar"><div><h1>Подписки</h1><p id="subscriptions-subtitle">0 профилей</p></div><button class="primary-button" type="button" id="add-profile"><svg><use href="#i-plus"/></svg><span>Добавить</span></button></header>
+        <div class="page-scroll">
+          <div class="content subscriptions-content">
+            <div class="subscription-list" id="subscription-list"></div>
+            <section class="empty-state hidden" id="subscription-empty">
+              <span><svg><use href="#i-layers"/></svg></span><h2>Подписок пока нет</h2><p>Добавьте полный YAML-профиль Remnawave.</p><button class="primary-button" type="button" id="empty-add-profile"><svg><use href="#i-plus"/></svg>Добавить подписку</button>
+            </section>
+          </div>
         </div>
       </section>
 
-      <section class="view" id="listener">
-        <div class="page-intro"><p class="section-kicker">Локальное переопределение</p><h2>Входящий mixed-порт</h2><p>Эта секция заменяет <code>listeners</code> из подписки. Через неё локальная сеть получает доступ к Mihomo по SOCKS5 и HTTP proxy.</p></div>
-        <div class="form-layout">
-          <label class="switch-field full"><input id="mixed-enabled" type="checkbox"><span class="switch"></span><span><b>Включить mixed listener</b><small>При выключении listeners из подписки будут удалены, чтобы профиль не открывал неизвестные локальные порты.</small></span></label>
-          <label class="field"><span>Имя</span><input id="mixed-name" type="text" maxlength="64" pattern="[A-Za-z0-9_-]+"></label>
-          <label class="field"><span>Порт</span><input id="mixed-port" type="number" min="1" max="65535" step="1"></label>
-          <label class="field"><span>Адрес прослушивания</span><input id="mixed-listen" type="text" spellcheck="false" placeholder="0.0.0.0"></label>
-          <label class="switch-field"><input id="mixed-udp" type="checkbox"><span class="switch"></span><span><b>Поддержка UDP</b><small>Нужна для SOCKS5 UDP ASSOCIATE.</small></span></label>
-          <label class="field full"><span>Пользователи</span><textarea id="mixed-users" rows="5" spellcheck="false" placeholder="username#password"></textarea><small>По одному пользователю в строке, формат <code>логин#пароль</code>. Оставьте пустым для доступа без аутентификации.</small></label>
+      <section class="page" data-page="settings">
+        <header class="control-bar"><div><h1>Настройки</h1><p>Параметры контейнера</p></div><button class="primary-button" type="button" id="save-settings"><svg><use href="#i-check"/></svg><span>Сохранить</span></button></header>
+        <nav class="settings-tabs" aria-label="Разделы настроек">
+          <div>
+            <button class="active" type="button" data-settings-tab="requests"><svg><use href="#i-link"/></svg><span>Заголовки</span></button>
+            <button type="button" data-settings-tab="traffic"><svg><use href="#i-layers"/></svg><span>Входящий трафик</span></button>
+            <button type="button" data-settings-tab="network"><svg><use href="#i-network"/></svg><span>Сеть Alpine</span></button>
+            <button type="button" data-settings-tab="panel"><svg><use href="#i-terminal"/></svg><span>Панель Mihomo</span></button>
+            <button type="button" data-settings-tab="override"><svg><use href="#i-file"/></svg><span>Глобальные переопределения</span></button>
+          </div>
+        </nav>
+        <div class="page-scroll">
+          <form class="content narrow settings-form" id="settings-form">
+            <section class="settings-section settings-panel active" data-settings-panel="requests">
+              <div class="settings-title"><h2>Заголовки Remnawave</h2><p>Используются при загрузке каждой подписки</p></div>
+              <div class="settings-grid header-editor">
+                <div class="header-editor-intro"><span><b>HTTP-заголовки</b><small>Обязательные ключи всегда отправляются. Их значения можно изменить.</small></span><button class="secondary-button" type="button" id="add-global-header"><svg><use href="#i-plus"/></svg>Добавить заголовок</button></div>
+                <div class="header-columns" aria-hidden="true"><span>Ключ</span><span>Значение</span><span></span></div>
+                <div class="header-rows" id="global-header-rows"></div>
+              </div>
+            </section>
+
+            <section class="settings-section settings-panel" data-settings-panel="traffic">
+              <div class="settings-title"><h2>Режим входящего трафика</h2><p>Определяет listeners и правила маршрутизации контейнера</p></div>
+              <aside class="settings-callout"><svg><use href="#i-alert"/></svg><div><b>Локальный режим перехвата имеет приоритет</b><p>Listeners типов REDIR, TPROXY и TUN из подписки, а также верхнеуровневые <code>redir-port</code>, <code>tproxy-port</code> и <code>tun</code>, всегда заменяются настройками контейнера. Остальные listeners сохраняются без изменений.</p></div></aside>
+              <div class="settings-grid mode-list">
+                <label class="setting-row radio-row"><span><b>Автоматически</b><small id="auto-mode-description">Определяется по поддержке nftables</small></span><input type="radio" name="listener-mode" value="auto"></label>
+                <label class="setting-row radio-row"><span><b>REDIR + TUN</b><small>TCP redirect, UDP tun</small></span><input type="radio" name="listener-mode" value="redir-tun"></label>
+                <label class="setting-row radio-row"><span><b>REDIR + TPROXY</b><small>TCP redirect, UDP tproxy</small></span><input type="radio" name="listener-mode" value="redir-tproxy"></label>
+                <label class="setting-row radio-row"><span><b>TPROXY</b><small>TCP и UDP через tproxy</small></span><input type="radio" name="listener-mode" value="tproxy"></label>
+                <div class="compound-setting listener-ports">
+                  <div class="field-grid two">
+                    <label data-port-field="redir"><span>Порт REDIR</span><input id="redir-port" type="number" min="1" max="65535" value="12345"></label>
+                    <label data-port-field="tproxy"><span>Порт TPROXY</span><input id="tproxy-port" type="number" min="1" max="65535" value="12346"></label>
+                  </div>
+                </div>
+              </div>
+              <p class="settings-note" id="listener-mode-note"></p>
+            </section>
+
+            <section class="settings-section settings-panel" data-settings-panel="network">
+              <div class="settings-title"><h2>Сеть Alpine</h2><p>Сетевой стек контейнера до запуска Mihomo</p></div>
+              <div class="settings-grid">
+                <div class="setting-row"><span><b>Firewall backend</b><small>Определяется по модулю ядра</small></span><strong id="network-firewall-backend">Определяется...</strong></div>
+                <div class="setting-row"><span><b>Интерфейс RouterOS</b><small>Берётся из текущего default route, маршруты не изменяются</small></span><strong id="network-active-interface">Определяется...</strong></div>
+                <label class="setting-row setting-select-row"><span><b>Очередь интерфейса</b><small>Модуль доступен контейнеру, только когда эта очередь используется в RouterOS</small></span><select id="network-qdisc"><option value="fq_codel">fq_codel</option><option value="cake">cake</option><option value="codel">codel</option><option value="sfq">sfq</option><option value="pfifo">pfifo</option><option value="bfifo">bfifo</option><option value="system">Системная</option></select></label>
+                <label class="setting-row switch-row"><span><b>IPv6</b><small>Разрешить IPv6 для текущих и новых интерфейсов контейнера</small></span><input id="network-ipv6" type="checkbox"><i></i></label>
+                <div class="setting-row"><span><b>Стандартные ip rule</b><small>local / main / default нормализуются под RouterOS при старте контейнера</small></span><strong>Всегда</strong></div>
+                <label class="setting-row switch-row"><span><b>Multicast</b><small>Разрешить multicast на интерфейсе RouterOS внутри контейнера</small></span><input id="network-multicast" type="checkbox"><i></i></label>
+              </div>
+              <details class="collapse-block network-advanced">
+                <summary>Таймауты conntrack, сек.<svg><use href="#i-chevron"/></svg></summary>
+                <div class="network-timeout-toolbar"><p>По умолчанию заданы таймауты RouterOS.</p><button class="secondary-button" type="button" id="reset-network-timeouts"><svg><use href="#i-refresh"/></svg>Сбросить</button></div>
+                <div class="network-timeout-grid">
+                  <label><span>TCP established</span><input id="network-ct-established" type="number" min="1" max="604800"></label>
+                  <label><span>TCP unacknowledged</span><input id="network-ct-unacknowledged" type="number" min="1" max="604800"></label>
+                  <label><span>TCP SYN sent</span><input id="network-ct-syn-sent" type="number" min="1" max="604800"></label>
+                  <label><span>TCP SYN recv</span><input id="network-ct-syn-recv" type="number" min="1" max="604800"></label>
+                  <label><span>TCP FIN wait</span><input id="network-ct-fin-wait" type="number" min="1" max="604800"></label>
+                  <label><span>TCP close wait</span><input id="network-ct-close-wait" type="number" min="1" max="604800"></label>
+                  <label><span>TCP last ACK</span><input id="network-ct-last-ack" type="number" min="1" max="604800"></label>
+                  <label><span>TCP time wait</span><input id="network-ct-time-wait" type="number" min="1" max="604800"></label>
+                  <label><span>TCP close</span><input id="network-ct-close" type="number" min="1" max="604800"></label>
+                  <label><span>UDP stream</span><input id="network-ct-udp-stream" type="number" min="1" max="604800"></label>
+                </div>
+              </details>
+              <p class="settings-note">Параметры Alpine применяются при старте контейнера и повторно только после их изменения. Start/Stop подписки управляет отдельно только перехватом Mihomo.</p>
+            </section>
+
+            <section class="settings-section settings-panel" data-settings-panel="panel">
+              <div class="settings-title"><h2>Панель управления Mihomo</h2><p>Контейнер скачивает архив в локальную папку, Mihomo открывает готовую панель через порт 9090</p></div>
+              <div class="settings-grid">
+                <div class="compound-setting">
+                  <div class="field-grid two panel-fields">
+                    <label><span>Готовая панель</span><select id="external-ui-preset">
+                      <option value="zashboard-cdn">Zashboard, компактная</option>
+                      <option value="zashboard">Zashboard, полная</option>
+                      <option value="metacubexd">MetaCubeXD</option>
+                      <option value="yacd-meta">Yacd-meta</option>
+                      <option value="custom">Свой URL</option>
+                    </select></label>
+                    <label><span>URL ZIP-архива</span><input id="external-ui-url" type="url" inputmode="url" spellcheck="false"></label>
+                  </div>
+                </div>
+                <label class="text-setting compact"><span><b>Пароль панели</b><small>Secret контроллера · изменение автоматически перезапускает Mihomo</small></span><span class="password-field"><input id="external-ui-secret" type="password" maxlength="512" autocomplete="new-password"><button class="icon-button" type="button" id="toggle-external-ui-secret" title="Показать пароль"><svg><use href="#i-eye"/></svg></button></span></label>
+                <div class="setting-row"><span><b>Локальная папка</b><small>При смене источника старые файлы удаляются</small></span><strong id="external-ui-state">/etc/mihomo/ui</strong></div>
+              </div>
+            </section>
+
+            <section class="settings-section settings-panel" data-settings-panel="override">
+              <div class="settings-title"><h2>Переопределение параметров Mihomo</h2><p>Управляемые значения применяются поверх любой выбранной подписки</p></div>
+              <div class="settings-grid">
+                <label class="setting-row setting-select-row"><span><b>Поиск процессов</b><small>В отдельной ОС контейнера обычно не нужен</small></span><select id="mihomo-find-process-mode"><option value="off">off</option><option value="strict">strict</option><option value="always">always</option></select></label>
+                <label class="setting-row setting-select-row"><span><b>Уровень журнала</b><small>Локальный log-level ядра Mihomo</small></span><select id="mihomo-log-level"><option value="silent">silent</option><option value="error">error</option><option value="warning">warning</option><option value="info">info</option><option value="debug">debug</option></select></label>
+                <label class="setting-row switch-row"><span><b>IPv6 в Mihomo</b><small>Не зависит от IPv6 сетевого стека Alpine</small></span><input id="mihomo-ipv6" type="checkbox"><i></i></label>
+              </div>
+
+              <div class="settings-title override-subtitle"><h2>Профиль</h2><p>Локальное хранение состояния ядра</p></div>
+              <div class="settings-grid">
+                <label class="setting-row switch-row"><span><b>Запоминать выбранные прокси</b><small>profile.store-selected</small></span><input id="mihomo-store-selected" type="checkbox"><i></i></label>
+                <label class="setting-row switch-row"><span><b>Хранить fake-ip</b><small>profile.store-fake-ip</small></span><input id="mihomo-store-fake-ip" type="checkbox"><i></i></label>
+              </div>
+
+              <div class="settings-title override-subtitle"><h2>Сниффер</h2><p>Управляемое переопределение секции sniffer для всех подписок</p></div>
+              <div class="settings-grid">
+                <label class="setting-row switch-row"><span><b>Переопределять sniffer</b><small>Если выключено, секция полностью остаётся из выбранной подписки</small></span><input id="mihomo-sniffer-override" type="checkbox"><i></i></label>
+              </div>
+              <details class="collapse-block sniffer-details" id="mihomo-sniffer-details">
+                <summary><span>Параметры sniffer<small id="mihomo-sniffer-summary">Переопределение выключено</small></span><svg><use href="#i-chevron"/></svg></summary>
+                <div class="sniffer-body" id="mihomo-sniffer-body">
+                  <div class="settings-grid">
+                    <label class="setting-row switch-row"><span><b>Включить sniffer</b><small>sniffer.enable</small></span><input id="mihomo-sniffer-enable" type="checkbox"><i></i></label>
+                    <label class="setting-row switch-row"><span><b>Принудительное DNS-сопоставление</b><small>force-dns-mapping</small></span><input id="mihomo-sniffer-force-dns-mapping" type="checkbox"><i></i></label>
+                    <label class="setting-row switch-row"><span><b>Разбирать чистый IP</b><small>parse-pure-ip</small></span><input id="mihomo-sniffer-parse-pure-ip" type="checkbox"><i></i></label>
+                    <label class="setting-row switch-row"><span><b>Подменять назначение</b><small>Глобальный override-destination</small></span><input id="mihomo-sniffer-override-destination" type="checkbox"><i></i></label>
+                  </div>
+                  <div class="sniffer-fields">
+                    <div class="field-grid three">
+                      <label><span>Порты QUIC</span><input id="mihomo-sniffer-quic-ports" type="text" placeholder="443" spellcheck="false"></label>
+                      <label><span>Порты TLS</span><input id="mihomo-sniffer-tls-ports" type="text" placeholder="443, 8443" spellcheck="false"></label>
+                      <label><span>Порты HTTP</span><input id="mihomo-sniffer-http-ports" type="text" placeholder="80, 8080-8880" spellcheck="false"></label>
+                    </div>
+                    <label class="setting-row switch-row sniffer-http-override"><span><b>Подменять назначение HTTP</b><small>Локальный override-destination для HTTP</small></span><input id="mihomo-sniffer-http-override-destination" type="checkbox"><i></i></label>
+                    <div class="field-grid two sniffer-lists">
+                      <label><span>Принудительные домены</span><textarea id="mihomo-sniffer-force-domain" rows="4" spellcheck="false" placeholder="+.example.com"></textarea></label>
+                      <label><span>Исключённые домены</span><textarea id="mihomo-sniffer-skip-domain" rows="4" spellcheck="false" placeholder="Mijia Cloud"></textarea></label>
+                      <label><span>Исключённые адреса источника</span><textarea id="mihomo-sniffer-skip-src-address" rows="4" spellcheck="false" placeholder="192.168.0.3/32"></textarea></label>
+                      <label><span>Исключённые адреса назначения</span><textarea id="mihomo-sniffer-skip-dst-address" rows="4" spellcheck="false" placeholder="192.168.0.3/32"></textarea></label>
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </section>
+          </form>
         </div>
       </section>
-
-      <section class="view" id="config">
-        <div class="page-intro"><p class="section-kicker">Диагностика</p><h2>Конфигурация</h2><p>Исходный YAML сохраняется после успешного скачивания. Рабочий YAML показывает результат локальных переопределений.</p></div>
-        <div class="config-tabs" role="tablist"><button class="tab active" data-config="source">Полученный YAML</button><button class="tab" data-config="final">Рабочий YAML</button></div>
-        <pre class="config-view" id="config-view">Загрузка...</pre>
-      </section>
-
-      <footer class="action-bar"><span id="save-state" aria-live="polite"></span><button class="button primary" id="save-button">Сохранить и применить</button></footer>
     </main>
   </div>
-  <script src="/assets/remna.js"></script>
+
+  <nav class="mobile-nav" aria-label="Разделы">
+    <button class="active" type="button" data-page-link="dashboard"><svg><use href="#i-home"/></svg><span>Управление</span></button>
+    <button type="button" data-page-link="subscriptions"><svg><use href="#i-layers"/></svg><span>Подписки</span></button>
+    <button type="button" data-page-link="settings"><svg><use href="#i-settings"/></svg><span>Настройки</span></button>
+  </nav>
+
+  <div class="modal-layer hidden" id="profile-modal-layer">
+    <section class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+      <header class="modal-header"><div><h2 id="editor-title">Новая подписка</h2><p>Настройки профиля</p></div><button class="round-button" type="button" id="close-editor" title="Закрыть"><svg><use href="#i-close"/></svg></button></header>
+      <form id="profile-form" class="modal-scroll">
+        <input id="profile-id" type="hidden">
+        <div class="settings-grid editor-grid">
+          <label class="text-setting compact"><span><b>Название</b></span><input id="profile-name" type="text" maxlength="80" autocomplete="off" required></label>
+          <label class="text-setting compact"><span><b>URL YAML-подписки</b></span><input id="profile-url" type="url" inputmode="url" autocomplete="off" placeholder="https://panel.example/sub/..." required></label>
+          <div class="compound-setting"><div class="field-grid two"><label><span>Обновление, сек.</span><input id="profile-refresh" type="number" min="30" max="86400"></label><label><span>Таймаут, сек.</span><input id="profile-timeout" type="number" min="3" max="120"></label></div></div>
+          <label class="setting-row switch-row"><span><b>Название от сервера</b><small>Использовать profile-title, если он пришёл с подпиской</small></span><input id="profile-use-provider-title" type="checkbox"><i></i></label>
+          <label class="setting-row switch-row"><span><b>Интервал от сервера</b><small>Использовать profile-update-interval вместо резервного значения выше</small></span><input id="profile-use-provider-interval" type="checkbox"><i></i></label>
+          <label class="setting-row switch-row"><span><b>Недоверенный TLS</b><small>Только для известного источника</small></span><input id="profile-insecure" type="checkbox"><i></i></label>
+        </div>
+        <section class="profile-provider hidden" id="profile-provider-meta">
+          <div class="profile-provider-head"><span><b>Данные подписки</b><small>Стандартные заголовки ответа Remnawave</small></span><strong id="profile-provider-title">Профиль</strong></div>
+          <div class="profile-provider-grid">
+            <span><small>Интервал</small><b id="profile-provider-interval">Не задан</b></span>
+            <span><small>Трафик</small><b id="profile-provider-traffic">Не задан</b></span>
+            <span><small>Действует до</small><b id="profile-provider-expire">Не задано</b></span>
+          </div>
+          <p class="profile-provider-announce hidden" id="profile-provider-announce"></p>
+          <div class="profile-provider-links"><a class="hidden" id="profile-provider-page" target="_blank" rel="noopener">Страница профиля<svg><use href="#i-external"/></svg></a><a class="hidden" id="profile-provider-support" target="_blank" rel="noopener">Поддержка<svg><use href="#i-external"/></svg></a></div>
+        </section>
+        <label class="setting-row switch-row local-override-master"><span><b>Локальные переопределения</b><small>Заголовки и параметры ниже действуют только для этой подписки и имеют приоритет над общими</small></span><input id="profile-local-override-enabled" type="checkbox"><i></i></label>
+        <details class="collapse-block" id="profile-local-details"><summary><span>Параметры этой подписки<small id="profile-local-state">Выключены</small></span><svg><use href="#i-chevron"/></svg></summary><div class="profile-local-body" id="profile-local-body">
+          <div class="profile-local-section">
+            <div class="header-editor-intro"><span><b>HTTP-заголовки запроса</b><small>Одноимённые ключи заменяют общие без учёта регистра</small></span><button class="secondary-button" type="button" id="add-profile-header"><svg><use href="#i-plus"/></svg>Добавить заголовок</button></div>
+            <div class="header-columns" aria-hidden="true"><span>Ключ</span><span>Значение</span><span></span></div>
+            <div class="header-rows" id="profile-header-rows"></div>
+          </div>
+          <div class="profile-local-section local-managed-grid">
+            <label><span>find-process-mode</span><select id="profile-local-find-process"><option value="inherit">Как в общих настройках</option><option value="off">off</option><option value="strict">strict</option><option value="always">always</option></select></label>
+            <label><span>log-level</span><select id="profile-local-log-level"><option value="inherit">Как в общих настройках</option><option value="silent">silent</option><option value="error">error</option><option value="warning">warning</option><option value="info">info</option><option value="debug">debug</option></select></label>
+            <label><span>IPv6</span><select id="profile-local-ipv6"><option value="inherit">Как в общих настройках</option><option value="0">Выключить</option><option value="1">Включить</option></select></label>
+            <label><span>store-selected</span><select id="profile-local-store-selected"><option value="inherit">Как в общих настройках</option><option value="0">false</option><option value="1">true</option></select></label>
+            <label><span>store-fake-ip</span><select id="profile-local-store-fake-ip"><option value="inherit">Как в общих настройках</option><option value="0">false</option><option value="1">true</option></select></label>
+            <label><span>Sniffer</span><select id="profile-local-sniffer"><option value="inherit">Как в общих настройках</option><option value="source">Оставить из подписки</option><option value="disabled">Выключить</option></select></label>
+          </div>
+          <label class="profile-local-yaml"><span><b>Дополнительный YAML</b><small>Верхнеуровневые секции заменяют одноимённые секции подписки</small></span><textarea class="code-editor" id="profile-override" rows="11" spellcheck="false" placeholder="dns:&#10;  enable: true"></textarea></label>
+        </div></details>
+      </form>
+      <footer class="modal-actions"><button class="secondary-button" type="button" id="cancel-editor">Отмена</button><button class="primary-button" type="submit" form="profile-form"><svg><use href="#i-check"/></svg>Сохранить</button></footer>
+    </section>
+  </div>
+
+  <div class="modal-layer hidden" id="source-yaml-modal">
+    <section class="modal yaml-modal" role="dialog" aria-modal="true" aria-labelledby="source-yaml-title">
+      <header class="modal-header"><div><h2 id="source-yaml-title">Полученный YAML</h2><p id="source-yaml-subtitle">Последний валидный ответ источника без локальных изменений</p></div><button class="round-button" type="button" id="close-source-yaml" title="Закрыть"><svg><use href="#i-close"/></svg></button></header>
+      <div class="yaml-modal-body"><textarea class="config-viewer" id="source-yaml-viewer" readonly spellcheck="false" aria-label="Полученный YAML">Файл ещё не создан.</textarea></div>
+      <footer class="modal-actions"><button class="secondary-button" type="button" id="copy-source-yaml"><svg><use href="#i-copy"/></svg>Копировать</button><button class="primary-button" type="button" id="done-source-yaml">Готово</button></footer>
+    </section>
+  </div>
+
+  <div class="modal-layer hidden" id="delete-modal">
+    <section class="modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title"><span class="danger-icon"><svg><use href="#i-trash"/></svg></span><h2 id="delete-title">Удалить подписку?</h2><p id="delete-message">Профиль и сохранённая конфигурация будут удалены.</p><div class="confirm-actions"><button class="secondary-button" type="button" id="delete-cancel">Отмена</button><button class="danger-button" type="button" id="delete-confirm">Удалить</button></div></section>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="assets/remna.js"></script>
 </body>
 </html>

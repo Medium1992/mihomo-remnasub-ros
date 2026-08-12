@@ -54,13 +54,12 @@ RUN chmod +x /final/entrypoint.sh /final/usr/local/bin/mihomo && \
     chmod 0755 /final/www/cgi-bin/* && \
     chmod 0644 /final/www/cgi-bin/_*.sh
 
-# armv7/armv5 ходят только через iptables (nft там нет) — убираем nft-скрипты
-# и скрипт выбора/установки backend (05-fw-modules: на этих сборках не нужен,
-# а на armv5 ещё и apk отсутствует).
+# armv7/armv5 ходят только через iptables (nft там нет) — убираем nft-скрипты.
+# 05-fw-modules остаётся на всех архитектурах: без apk он только проверяет
+# готовый backend из Buildroot, а на Alpine при необходимости ставит пакет.
 RUN if [ "$TARGETARCH" = "arm" ] && { [ "$TARGETVARIANT" = "v7" ] || [ "$TARGETVARIANT" = "v5" ]; }; then \
       rm -f /final/etc/mihomo/scripts/*nft*.sh* \
-            /final/etc/mihomo/scripts-post/*nft*.sh* \
-            /final/etc/mihomo/scripts/05-fw-modules.sh; \
+            /final/etc/mihomo/scripts-post/*nft*.sh*; \
     fi
 
 

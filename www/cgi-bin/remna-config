@@ -1,5 +1,24 @@
 #!/bin/sh
 . /www/cgi-bin/_remna.sh
-case "${QUERY_STRING:-}" in kind=source*) file="$SOURCE" ;; kind=final*) file="$FINAL" ;; *) file='' ;; esac
+
+kind=''
+profile_id="$ACTIVE_PROFILE_ID"
+old_ifs=$IFS
+IFS='&'
+for pair in ${QUERY_STRING:-}; do
+  case "$pair" in
+    kind=*) kind=${pair#kind=} ;;
+    profile_id=*) profile_id=${pair#profile_id=} ;;
+  esac
+done
+IFS=$old_ifs
+
+valid_profile_id "$profile_id" || profile_id="$ACTIVE_PROFILE_ID"
+case "$kind" in
+  source) file="$PROFILES_DIR/$profile_id.source.yaml" ;;
+  final) file="/dev/shm/remnasub/$profile_id.config.yaml" ;;
+  *) file='' ;;
+esac
+
 text_headers
 [ -n "$file" ] && [ -f "$file" ] && cat "$file"
