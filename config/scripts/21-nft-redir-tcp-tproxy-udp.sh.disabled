@@ -1,29 +1,32 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────
 #  Режим: Redirect(tcp) + TProxy(udp) через nftables.
-#  TCP -> `redir-in` (12345), UDP -> `tproxy-in` (12346).
+#  TCP -> `redir-in`, UDP -> `tproxy-in`.
 #  PRE: можно сразу — TUN не нужен. Включи: переименуй в *.sh.
 #  Порядок: сначала nft, потом policy-routing.
 # ─────────────────────────────────────────────────────────────
 set -e
 
-IFACE="$(ip -o link show | awk -F': ' '/link\/ether/ {print $2}' | cut -d'@' -f1 | head -n1)"
+IFACE=${ROUTE_IFACE:-}
+[ -n "$IFACE" ] && ip link show dev "$IFACE" >/dev/null 2>&1 || \
+  IFACE="$(ip -o link show up | awk -F': ' '/link\/ether/ {gsub(/@.*$/, "", $2); if ($2 != "lo" && $2 != "Meta" && $2 !~ /^hs5t/) {print $2; exit}}')"
+[ -n "$IFACE" ] || { echo "[route] входящий Ethernet-интерфейс не найден"; exit 1; }
 IFACE_CIDR="$(ip -4 -o addr show dev "$IFACE" scope global | awk '{print $4; exit}')"
 [ -n "$IFACE_CIDR" ] || IFACE_CIDR="127.0.0.1/32"
-REDIR=12345; TPROXY=12346; MARK=1; RT=100
+REDIR=${REDIR_PORT:-12345}; TPROXY=${TPROXY_PORT:-12346}; MARK=1; RT=100
 
 # === nftables: чистка + правила (если nft нет — упадёт здесь, до роутинга) ===
 nft delete table inet mihomo 2>/dev/null || true
 nft add table inet mihomo
 
-# TCP -> redirect 12345
+# TCP -> redirect
 nft add chain inet mihomo nat "{ type nat hook prerouting priority dstnat + 1; policy accept; }"
 nft add rule inet mihomo nat meta iifname != "$IFACE" return
 nft add rule inet mihomo nat tcp option mptcp exists drop
 nft add rule inet mihomo nat ip daddr { $IFACE_CIDR, 127.0.0.0/8, 198.19.0.0/30, 224.0.0.0/4, 255.255.255.255 } return
 nft add rule inet mihomo nat meta l4proto tcp redirect to $REDIR
 
-# UDP -> tproxy 12346
+# UDP -> tproxy
 nft add chain inet mihomo pre "{ type filter hook prerouting priority filter; policy accept; }"
 nft add rule inet mihomo pre meta iifname != "$IFACE" return
 nft add rule inet mihomo pre ip daddr { $IFACE_CIDR, 127.0.0.0/8, 224.0.0.0/4, 255.255.255.255 } return
