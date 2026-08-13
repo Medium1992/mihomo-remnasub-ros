@@ -10,7 +10,6 @@
 ![Platforms](https://img.shields.io/badge/arch-amd64%20%7C%20arm64%20%7C%20armv7%20%7C%20armv5-blue)
 [![Telegram](https://img.shields.io/badge/Telegram-группа-blue?logo=telegram)](https://t.me/+96HVPF3Ww6o3YTNi)
 
-<p align="center"><img src="./ui-preview.png" width="1000" alt="Веб-панель RemnaSub RoS"></p>
 
 ## ✨ Возможности
 
