@@ -138,7 +138,7 @@ profiles_json() {
     id=${id%.conf}
     profile_source="$PROFILES_DIR/$id.source.yaml"
     profile_final="$RUNTIME_DIR/$id.config.yaml"
-    profile_error="$PROFILES_DIR/$id.error.txt"
+    profile_error="$ERRORS_DIR/$id.txt"
     profile_meta="$PROFILES_DIR/$id.source.meta"
     source_present=false
     final_present=false
@@ -147,7 +147,8 @@ profiles_json() {
     [ -s "$profile_source" ] && source_present=true
     [ -s "$profile_final" ] && final_present=true
     if [ -f "$profile_source" ]; then
-      updated_at=$(stat -c '%Y' "$profile_source" 2>/dev/null || printf '0')
+      updated_at=$(profile_meta_get "$profile_meta" fetched_epoch 0)
+      valid_number "$updated_at" || updated_at=$(stat -c '%Y' "$profile_source" 2>/dev/null || printf '0')
     fi
     if [ -f "$profile_final" ]; then
       final_updated_at=$(stat -c '%Y' "$profile_final" 2>/dev/null || printf '0')
@@ -195,9 +196,74 @@ profiles_json() {
   done
 }
 
+query_value() {
+  query_key="$1"
+  printf '%s' "${QUERY_STRING:-}" | tr '&' '\n' | awk -F= -v key="$query_key" '
+    $1 == key { sub(/^[^=]*=/, ""); print; exit }
+  '
+}
+
+profile_detail_json() (
+  view_id="$1"
+  view_path=$(profile_file "$view_id") || return 1
+  view_source="$PROFILES_DIR/$view_id.source.yaml"
+  view_final="$RUNTIME_DIR/$view_id.config.yaml"
+  view_error="$ERRORS_DIR/$view_id.txt"
+  view_meta="$PROFILES_DIR/$view_id.source.meta"
+  view_source_present=false
+  view_final_present=false
+  view_updated_at=0
+  [ -s "$view_source" ] && view_source_present=true
+  [ -s "$view_final" ] && view_final_present=true
+  if [ -f "$view_source" ]; then
+    view_updated_at=$(profile_meta_get "$view_meta" fetched_epoch 0)
+    valid_number "$view_updated_at" || view_updated_at=$(stat -c '%Y' "$view_source" 2>/dev/null || printf '0')
+  fi
+
+  printf '{'
+  printf '"id":"%s",' "$view_id"
+  printf '"name_b64":"%s",' "$(state_file_get "$view_path" NAME_B64 "$(b64 "$view_id")")"
+  printf '"display_name_b64":"%s",' "$(profile_effective_name_b64 "$view_path" "$view_meta")"
+  printf '"url_b64":"%s",' "$(state_file_get "$view_path" SUB_URL_B64)"
+  printf '"headers_b64":"%s",' "$(state_file_get "$view_path" SUB_HEADERS_B64)"
+  printf '"local_override_enabled":%s,' "$(profile_local_override_enabled "$view_path")"
+  printf '"local_override_b64":"%s",' "$(state_file_get "$view_path" LOCAL_OVERRIDE_B64)"
+  printf '"local_find_process_mode":"%s",' "$(state_file_get "$view_path" LOCAL_FIND_PROCESS_MODE inherit)"
+  printf '"local_log_level":"%s",' "$(state_file_get "$view_path" LOCAL_LOG_LEVEL inherit)"
+  printf '"local_ipv6":"%s",' "$(state_file_get "$view_path" LOCAL_IPV6 inherit)"
+  printf '"local_store_selected":"%s",' "$(state_file_get "$view_path" LOCAL_STORE_SELECTED inherit)"
+  printf '"local_store_fake_ip":"%s",' "$(state_file_get "$view_path" LOCAL_STORE_FAKE_IP inherit)"
+  printf '"local_sniffer_mode":"%s",' "$(state_file_get "$view_path" LOCAL_SNIFFER_MODE inherit)"
+  printf '"use_provider_title":%s,' "$(bool_or "$(state_file_get "$view_path" SUB_USE_PROVIDER_TITLE 1)" 1)"
+  printf '"use_provider_interval":%s,' "$(bool_or "$(state_file_get "$view_path" SUB_USE_PROVIDER_INTERVAL 1)" 1)"
+  printf '"refresh_seconds":%s,' "$(number_or "$(state_file_get "$view_path" SUB_REFRESH_SECONDS 3600)" 3600)"
+  printf '"effective_refresh_seconds":%s,' "$(profile_effective_refresh "$view_path" "$view_meta")"
+  printf '"timeout_seconds":%s,' "$(number_or "$(state_file_get "$view_path" SUB_TIMEOUT_SECONDS 30)" 30)"
+  printf '"insecure_tls":%s,' "$(bool_or "$(state_file_get "$view_path" SUB_INSECURE_TLS 0)" 0)"
+  printf '"provider_title_b64":"%s",' "$(profile_meta_get "$view_meta" provider_title_b64)"
+  printf '"provider_refresh_seconds":%s,' "$(number_or "$(profile_meta_get "$view_meta" provider_refresh_seconds)" 0)"
+  printf '"subscription_userinfo_b64":"%s",' "$(profile_meta_get "$view_meta" subscription_userinfo_b64)"
+  printf '"profile_web_page_url_b64":"%s",' "$(profile_meta_get "$view_meta" profile_web_page_url_b64)"
+  printf '"support_url_b64":"%s",' "$(profile_meta_get "$view_meta" support_url_b64)"
+  printf '"subscription_refill_date_b64":"%s",' "$(profile_meta_get "$view_meta" subscription_refill_date_b64)"
+  printf '"announce_b64":"%s",' "$(profile_meta_get "$view_meta" announce_b64)"
+  printf '"source_present":%s,' "$view_source_present"
+  printf '"final_present":%s,' "$view_final_present"
+  printf '"updated_at":%s,' "$view_updated_at"
+  printf '"final_updated_at":%s,' "$(stat -c '%Y' "$view_final" 2>/dev/null || printf '0')"
+  printf '"configuration_valid":"%s",' "$(profile_meta_get "$view_meta" configuration_valid unknown)"
+  printf '"http_status":"%s",' "$(profile_meta_get "$view_meta" http_status)"
+  printf '"http_status_line_b64":"%s",' "$(profile_meta_get "$view_meta" http_status_line_b64)"
+  printf '"validation_b64":"%s",' "$(profile_meta_get "$view_meta" validation_b64)"
+  printf '"zero_vless_count":%s,' "$(number_or "$(profile_meta_get "$view_meta" zero_vless_count)" 0)"
+  printf '"zero_vless_entries_b64":"%s",' "$(profile_meta_get "$view_meta" zero_vless_entries_b64)"
+  printf '"error_b64":"%s"' "$(b64 "$(cat "$view_error" 2>/dev/null || true)")"
+  printf '}'
+)
+
 write_state() {
   active_id="$1" run_enabled="$2"
-  tmp_state="$STATE.tmp.$$"
+  tmp_state="$RUNTIME_DIR/state.cgi.$$"
   umask 077
   cat > "$tmp_state" <<EOF
 STATE_VERSION=5
@@ -242,13 +308,13 @@ NETWORK_CT_CLOSE=$(state_file_get "$STATE" NETWORK_CT_CLOSE 10)
 NETWORK_CT_UNACKNOWLEDGED=$(state_file_get "$STATE" NETWORK_CT_UNACKNOWLEDGED 300)
 NETWORK_CT_UDP_STREAM=$(state_file_get "$STATE" NETWORK_CT_UDP_STREAM 180)
 EOF
-  mv "$tmp_state" "$STATE"
+  persist_file_if_changed "$tmp_state" "$STATE" || deny 'could not save runtime state'
 }
 
 write_container_settings() {
   active_id=$(state_file_get "$STATE" ACTIVE_PROFILE_ID "$ACTIVE_PROFILE_ID")
   run_enabled=$(state_file_get "$STATE" RUN_ENABLED 0)
-  tmp_state="$STATE.tmp.$$"
+  tmp_state="$RUNTIME_DIR/settings.cgi.$$"
   umask 077
   cat > "$tmp_state" <<EOF
 STATE_VERSION=5
@@ -293,26 +359,22 @@ NETWORK_CT_CLOSE=$network_ct_close
 NETWORK_CT_UNACKNOWLEDGED=$network_ct_unacknowledged
 NETWORK_CT_UDP_STREAM=$network_ct_udp_stream
 EOF
-  mv "$tmp_state" "$STATE"
+  persist_file_if_changed "$tmp_state" "$STATE" || deny 'could not save container settings'
 }
 
 if [ "${REQUEST_METHOD:-GET}" = GET ]; then
   view_id="$ACTIVE_PROFILE_ID"
-  case "${QUERY_STRING:-}" in
-    profile_id=*) requested_id=${QUERY_STRING#profile_id=} ; valid_profile_id "$requested_id" && [ -f "$(profile_file "$requested_id")" ] && view_id="$requested_id" ;;
-  esac
-  view_path=$(profile_file "$view_id") || view_path="$PROFILE"
-  view_source="$PROFILES_DIR/$view_id.source.yaml"
-  view_final="$RUNTIME_DIR/$view_id.config.yaml"
-  view_error="$PROFILES_DIR/$view_id.error.txt"
-  view_meta="$PROFILES_DIR/$view_id.source.meta"
-  view_source_present=false
-  view_final_present=false
-  view_updated_at=0
-  [ -s "$view_source" ] && view_source_present=true
-  [ -s "$view_final" ] && view_final_present=true
-  if [ -f "$view_source" ]; then
-    view_updated_at=$(stat -c '%Y' "$view_source" 2>/dev/null || printf '0')
+  requested_id=$(query_value profile_id)
+  if [ -n "$requested_id" ]; then
+    valid_profile_id "$requested_id" && [ -f "$(profile_file "$requested_id")" ] || deny 'profile not found'
+    view_id="$requested_id"
+  fi
+  if [ "$(query_value compact)" = 1 ]; then
+    json_headers
+    printf '{"ok":true,"profile":'
+    profile_detail_json "$view_id"
+    printf '}\n'
+    exit 0
   fi
   json_headers
   printf '{"ok":true,"state":{'
@@ -362,45 +424,9 @@ if [ "${REQUEST_METHOD:-GET}" = GET ]; then
   printf '"network_ct_udp_stream":%s' "$(state_file_get "$STATE" NETWORK_CT_UDP_STREAM 180)"
   printf '},"profiles":['
   profiles_json
-  printf '],"profile":{'
-  printf '"id":"%s",' "$view_id"
-  printf '"name_b64":"%s",' "$(state_file_get "$view_path" NAME_B64 "$(b64 "$view_id")")"
-  printf '"display_name_b64":"%s",' "$(profile_effective_name_b64 "$view_path" "$view_meta")"
-  printf '"url_b64":"%s",' "$(state_file_get "$view_path" SUB_URL_B64)"
-  printf '"headers_b64":"%s",' "$(state_file_get "$view_path" SUB_HEADERS_B64)"
-  printf '"local_override_enabled":%s,' "$(profile_local_override_enabled "$view_path")"
-  printf '"local_override_b64":"%s",' "$(state_file_get "$view_path" LOCAL_OVERRIDE_B64)"
-  printf '"local_find_process_mode":"%s",' "$(state_file_get "$view_path" LOCAL_FIND_PROCESS_MODE inherit)"
-  printf '"local_log_level":"%s",' "$(state_file_get "$view_path" LOCAL_LOG_LEVEL inherit)"
-  printf '"local_ipv6":"%s",' "$(state_file_get "$view_path" LOCAL_IPV6 inherit)"
-  printf '"local_store_selected":"%s",' "$(state_file_get "$view_path" LOCAL_STORE_SELECTED inherit)"
-  printf '"local_store_fake_ip":"%s",' "$(state_file_get "$view_path" LOCAL_STORE_FAKE_IP inherit)"
-  printf '"local_sniffer_mode":"%s",' "$(state_file_get "$view_path" LOCAL_SNIFFER_MODE inherit)"
-  printf '"use_provider_title":%s,' "$(bool_or "$(state_file_get "$view_path" SUB_USE_PROVIDER_TITLE 1)" 1)"
-  printf '"use_provider_interval":%s,' "$(bool_or "$(state_file_get "$view_path" SUB_USE_PROVIDER_INTERVAL 1)" 1)"
-  printf '"refresh_seconds":%s,' "$(number_or "$(state_file_get "$view_path" SUB_REFRESH_SECONDS 3600)" 3600)"
-  printf '"effective_refresh_seconds":%s,' "$(profile_effective_refresh "$view_path" "$view_meta")"
-  printf '"timeout_seconds":%s,' "$(number_or "$(state_file_get "$view_path" SUB_TIMEOUT_SECONDS 30)" 30)"
-  printf '"insecure_tls":%s,' "$(bool_or "$(state_file_get "$view_path" SUB_INSECURE_TLS 0)" 0)"
-  printf '"provider_title_b64":"%s",' "$(profile_meta_get "$view_meta" provider_title_b64)"
-  printf '"provider_refresh_seconds":%s,' "$(number_or "$(profile_meta_get "$view_meta" provider_refresh_seconds)" 0)"
-  printf '"subscription_userinfo_b64":"%s",' "$(profile_meta_get "$view_meta" subscription_userinfo_b64)"
-  printf '"profile_web_page_url_b64":"%s",' "$(profile_meta_get "$view_meta" profile_web_page_url_b64)"
-  printf '"support_url_b64":"%s",' "$(profile_meta_get "$view_meta" support_url_b64)"
-  printf '"subscription_refill_date_b64":"%s",' "$(profile_meta_get "$view_meta" subscription_refill_date_b64)"
-  printf '"announce_b64":"%s",' "$(profile_meta_get "$view_meta" announce_b64)"
-  printf '"source_present":%s,' "$view_source_present"
-  printf '"final_present":%s,' "$view_final_present"
-  printf '"updated_at":%s,' "$view_updated_at"
-  printf '"final_updated_at":%s,' "$(stat -c '%Y' "$view_final" 2>/dev/null || printf '0')"
-  printf '"configuration_valid":"%s",' "$(profile_meta_get "$view_meta" configuration_valid unknown)"
-  printf '"http_status":"%s",' "$(profile_meta_get "$view_meta" http_status)"
-  printf '"http_status_line_b64":"%s",' "$(profile_meta_get "$view_meta" http_status_line_b64)"
-  printf '"validation_b64":"%s",' "$(profile_meta_get "$view_meta" validation_b64)"
-  printf '"zero_vless_count":%s,' "$(number_or "$(profile_meta_get "$view_meta" zero_vless_count)" 0)"
-  printf '"zero_vless_entries_b64":"%s",' "$(profile_meta_get "$view_meta" zero_vless_entries_b64)"
-  printf '"error_b64":"%s"' "$(b64 "$(cat "$view_error" 2>/dev/null || true)")"
-  printf '}}\n'
+  printf '],"profile":'
+  profile_detail_json "$view_id"
+  printf '}\n'
   exit 0
 fi
 
@@ -499,7 +525,7 @@ EOF
       "$profile_path" \
       "$PROFILES_DIR/$target_id.source.yaml" \
       "$PROFILES_DIR/$target_id.source.meta" \
-      "$PROFILES_DIR/$target_id.error.txt" \
+      "$ERRORS_DIR/$target_id.txt" \
       "$RUNTIME_DIR/$target_id.config.yaml" \
       "$JOBS_DIR/$target_id.request" \
       "$STATUS_DIR/$target_id.conf"
@@ -691,7 +717,7 @@ clean_name=$(printf '%s' "$name" | tr -d '\r\n')
 [ "$clean_name" = "$name" ] || deny 'Profile name must be one line'
 [ "${#name}" -le 80 ] || deny 'Profile name is too long'
 
-tmp="$target_path.tmp.$$"
+tmp="$RUNTIME_DIR/profile.$target_id.$$"
 umask 077
 cat > "$tmp" <<EOF
 PROFILE_VERSION=2
@@ -712,7 +738,7 @@ SUB_REFRESH_SECONDS=$refresh
 SUB_TIMEOUT_SECONDS=$timeout
 SUB_INSECURE_TLS=$insecure
 EOF
-mv "$tmp" "$target_path"
+persist_file_if_changed "$tmp" "$target_path" || deny 'could not save profile'
 new_fetch_signature="$(b64 "$url")|$(b64 "$headers")|$timeout|$insecure"
 new_build_signature="$local_override_enabled|$(b64 "$local_override")|$local_find_process_mode|$local_log_level|$local_ipv6|$local_store_selected|$local_store_fake_ip|$local_sniffer_mode"
 queued=false

@@ -47,41 +47,23 @@
       <section class="sidebar-core">
         <div><i id="sidebar-core-dot"></i><strong id="sidebar-core-title">Mihomo остановлен</strong></div>
         <p id="sidebar-active-profile">Профиль не выбран</p>
-        <button type="button" data-open-mihomo><svg><use href="#i-terminal"/></svg><span>Панель Mihomo</span><svg><use href="#i-external"/></svg></button>
       </section>
     </aside>
 
     <main class="main">
       <section class="page active" data-page="subscriptions">
-        <header class="control-bar"><div><h1>Подписки</h1><p id="subscriptions-subtitle">0 профилей</p></div><div class="control-actions"><button class="round-button" type="button" data-open-mihomo title="Панель Mihomo"><svg><use href="#i-external"/></svg></button><button class="primary-button" type="button" id="add-profile"><svg><use href="#i-plus"/></svg><span>Добавить</span></button></div></header>
+        <header class="control-bar">
+          <div><h1>Подписки</h1><p id="subscriptions-subtitle">0 профилей</p></div>
+          <div class="control-actions">
+            <button class="secondary-button runtime-header-button" type="button" id="open-active-runtime-yaml" disabled title="Рабочий YAML активной подписки"><svg><use href="#i-file"/></svg><span>Рабочий YAML</span></button>
+            <button class="secondary-button runtime-header-button" type="button" id="open-runtime-events" title="События контейнера"><svg><use href="#i-terminal"/></svg><span>События</span></button>
+            <button class="secondary-button runtime-header-button" type="button" data-open-mihomo title="Открыть панель Mihomo"><svg><use href="#i-external"/></svg><span>Панель Mihomo</span></button>
+            <button class="primary-button" type="button" id="add-profile"><svg><use href="#i-plus"/></svg><span>Добавить</span></button>
+          </div>
+        </header>
         <div class="page-scroll">
           <div class="content subscriptions-content">
             <div class="subscription-list" id="subscription-list"></div>
-            <details class="active-runtime-panel hidden" id="active-runtime-details">
-              <summary>
-                <span class="active-runtime-heading"><span class="subscription-icon"><svg><use href="#i-terminal"/></svg></span><span><strong id="active-runtime-name">Выбранная подписка</strong><small>Состояние ядра, рабочая конфигурация и журнал контейнера</small></span></span>
-                <span class="state-pill idle" id="active-runtime-chip"><i></i>Остановлено</span>
-                <svg class="active-runtime-chevron"><use href="#i-chevron"/></svg>
-              </summary>
-              <div class="active-runtime-body">
-                <div class="runtime-status-grid">
-                  <span><small>Источник</small><strong id="active-source-state">Нет данных</strong></span>
-                  <span><small>Конфигурация</small><strong id="active-config-state">Не собрана</strong></span>
-                  <span><small>Маршрутизация</small><strong id="active-route-mode">Автоматически</strong></span>
-                </div>
-                <div class="inline-alert hidden" id="active-runtime-error" role="alert"></div>
-                <details class="collapse-block active-runtime-yaml hidden" id="active-runtime-yaml-details">
-                  <summary><span>Рабочий YAML<small>Итоговая конфигурация активной подписки со всеми переопределениями</small></span><svg><use href="#i-chevron"/></svg></summary>
-                  <div class="config-toolbar"><span>Только чтение</span><button class="icon-button" type="button" id="copy-active-runtime-yaml" title="Копировать рабочий YAML"><svg><use href="#i-copy"/></svg></button></div>
-                  <textarea class="config-viewer" id="active-runtime-yaml" readonly spellcheck="false" aria-label="Рабочий YAML">Файл ещё не создан.</textarea>
-                </details>
-                <details class="collapse-block runtime-events" id="runtime-events-details">
-                  <summary><span>События контейнера<small>Загрузка подписок, проверка конфигураций и обновление панели · хранится только в RAM</small></span><svg><use href="#i-chevron"/></svg></summary>
-                  <div class="config-toolbar"><span id="runtime-events-state">Событий пока нет</span><button class="icon-button" type="button" id="copy-runtime-events" title="Копировать журнал"><svg><use href="#i-copy"/></svg></button></div>
-                  <textarea class="config-viewer" id="runtime-events" readonly spellcheck="false" aria-label="События контейнера">Событий пока нет.</textarea>
-                </details>
-              </div>
-            </details>
             <section class="empty-state hidden" id="subscription-empty">
               <span><svg><use href="#i-layers"/></svg></span><h2>Подписок пока нет</h2><p>Добавьте полный YAML-профиль Remnawave.</p><button class="primary-button" type="button" id="empty-add-profile"><svg><use href="#i-plus"/></svg>Добавить подписку</button>
             </section>
@@ -97,7 +79,8 @@
             <button type="button" data-settings-tab="traffic"><svg><use href="#i-layers"/></svg><span>Входящий трафик</span></button>
             <button type="button" data-settings-tab="network"><svg><use href="#i-network"/></svg><span>Сеть Alpine</span></button>
             <button type="button" data-settings-tab="panel"><svg><use href="#i-terminal"/></svg><span>Панель Mihomo</span></button>
-            <button type="button" data-settings-tab="override"><svg><use href="#i-file"/></svg><span>Глобальные переопределения</span></button>
+            <button type="button" data-settings-tab="override"><svg><use href="#i-file"/></svg><span>Переопределения</span></button>
+            <button type="button" data-settings-tab="access"><svg><use href="#i-lock"/></svg><span>Доступ</span></button>
           </div>
         </nav>
         <div class="page-scroll">
@@ -222,6 +205,21 @@
                 </div>
               </details>
             </section>
+
+            <section class="settings-section settings-panel" data-settings-panel="access">
+              <div class="settings-title"><h2>Пароль веб-панели</h2><p>Генератор md5crypt-хеша для переменной окружения BASIC_AUTH_HASH</p></div>
+              <aside class="settings-callout"><svg><use href="#i-lock"/></svg><div><b>Открытый пароль не сохраняется</b><p>Хеш создаётся локально внутри контейнера через OpenSSL. Добавьте его в ENV <code>BASIC_AUTH_HASH</code> и перезапустите контейнер. Логин задаётся через <code>BASIC_AUTH_USER</code>.</p></div></aside>
+              <div class="settings-grid password-generator">
+                <label class="text-setting compact"><span><b>Новый пароль</b><small>Используйте уникальный пароль для этой панели</small></span><span class="password-field"><input id="basic-auth-password" type="password" maxlength="512" autocomplete="new-password"><button class="icon-button" type="button" data-toggle-password="basic-auth-password" title="Показать пароль"><svg><use href="#i-eye"/></svg></button></span></label>
+                <label class="text-setting compact"><span><b>Повторите пароль</b><small>Защищает от случайной опечатки</small></span><span class="password-field"><input id="basic-auth-password-confirm" type="password" maxlength="512" autocomplete="new-password"><button class="icon-button" type="button" data-toggle-password="basic-auth-password-confirm" title="Показать пароль"><svg><use href="#i-eye"/></svg></button></span></label>
+                <div class="password-generator-action"><button class="primary-button" type="button" id="generate-basic-auth-hash"><svg><use href="#i-lock"/></svg>Создать хеш</button></div>
+                <div class="password-hash-result hidden" id="basic-auth-hash-result">
+                  <span><b>BASIC_AUTH_HASH</b><small>Примените этот хеш пароля в переменной окружения <code>BASIC_AUTH_HASH</code>.</small></span>
+                  <span class="copy-field"><input id="basic-auth-hash" type="text" readonly spellcheck="false"><button class="icon-button" type="button" id="copy-basic-auth-hash" title="Копировать хеш"><svg><use href="#i-copy"/></svg></button></span>
+                </div>
+              </div>
+              <p class="settings-note security-warning">Веб-панель использует HTTP Basic Auth. Не публикуйте порт 80 контейнера в интернет: по обычному HTTP логин и пароль не шифруются.</p>
+            </section>
           </form>
         </div>
       </section>
@@ -281,8 +279,24 @@
   <div class="modal-layer hidden" id="source-yaml-modal">
     <section class="modal yaml-modal" role="dialog" aria-modal="true" aria-labelledby="source-yaml-title">
       <header class="modal-header"><div><h2 id="source-yaml-title">Полученный YAML</h2><p id="source-yaml-subtitle">Последний HTTP-ответ источника без локальных изменений</p></div><button class="round-button" type="button" id="close-source-yaml" title="Закрыть"><svg><use href="#i-close"/></svg></button></header>
-      <div class="yaml-modal-body"><textarea class="config-viewer" id="source-yaml-viewer" readonly spellcheck="false" aria-label="Полученный YAML">Файл ещё не создан.</textarea></div>
+      <div class="yaml-modal-body"><pre class="config-viewer yaml-viewer" id="source-yaml-viewer" role="textbox" aria-readonly="true" tabindex="0" aria-label="Полученный YAML">Файл ещё не создан.</pre></div>
       <footer class="modal-actions"><button class="secondary-button" type="button" id="copy-source-yaml"><svg><use href="#i-copy"/></svg>Копировать</button><button class="primary-button" type="button" id="done-source-yaml">Готово</button></footer>
+    </section>
+  </div>
+
+  <div class="modal-layer hidden" id="runtime-yaml-modal">
+    <section class="modal yaml-modal" role="dialog" aria-modal="true" aria-labelledby="runtime-yaml-title">
+      <header class="modal-header"><div><h2 id="runtime-yaml-title">Рабочий YAML</h2><p id="runtime-yaml-subtitle">Итоговая конфигурация активной подписки со всеми переопределениями</p></div><button class="round-button" type="button" id="close-runtime-yaml" title="Закрыть"><svg><use href="#i-close"/></svg></button></header>
+      <div class="yaml-modal-body"><pre class="config-viewer yaml-viewer" id="active-runtime-yaml" role="textbox" aria-readonly="true" tabindex="0" aria-label="Рабочий YAML">Файл ещё не создан.</pre></div>
+      <footer class="modal-actions"><button class="secondary-button" type="button" id="copy-active-runtime-yaml"><svg><use href="#i-copy"/></svg>Копировать</button><button class="primary-button" type="button" id="done-runtime-yaml">Готово</button></footer>
+    </section>
+  </div>
+
+  <div class="modal-layer hidden" id="runtime-events-modal">
+    <section class="modal yaml-modal" role="dialog" aria-modal="true" aria-labelledby="runtime-events-title">
+      <header class="modal-header"><div><h2 id="runtime-events-title">События контейнера</h2><p>Загрузка подписок, проверка конфигураций и обновление панели · журнал хранится только в RAM</p></div><button class="round-button" type="button" id="close-runtime-events" title="Закрыть"><svg><use href="#i-close"/></svg></button></header>
+      <div class="yaml-modal-body"><textarea class="config-viewer" id="runtime-events" readonly spellcheck="false" aria-label="События контейнера">Событий пока нет.</textarea></div>
+      <footer class="modal-actions"><span class="modal-footer-state" id="runtime-events-state">Событий пока нет</span><button class="secondary-button" type="button" id="copy-runtime-events"><svg><use href="#i-copy"/></svg>Копировать</button><button class="primary-button" type="button" id="done-runtime-events">Готово</button></footer>
     </section>
   </div>
 

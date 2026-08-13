@@ -17,6 +17,7 @@ RUNTIME_DIR=/dev/shm/remnasub
 NETWORK_SIGNATURE_FILE="$RUNTIME_DIR/network.signature"
 JOBS_DIR="$RUNTIME_DIR/jobs"
 STATUS_DIR="$RUNTIME_DIR/status"
+ERRORS_DIR="$RUNTIME_DIR/errors"
 EVENT_LOG="$RUNTIME_DIR/events.log"
 UI_STATUS="$RUNTIME_DIR/ui.status"
 UI_REQUEST="$RUNTIME_DIR/ui.request"
@@ -24,14 +25,45 @@ FINAL="$RUNTIME_DIR/config.yaml"
 UI_DIR="$MIHOMO_DIR/ui"
 WEB_ROOT=/www
 WEBROOT=/dev/shm/web
-HTTPD_CONF=/etc/httpd.conf
+HTTPD_CONF="$RUNTIME_DIR/httpd.conf"
 
 BASIC_AUTH_HASH_DEFAULT='$1$mihomors$BipEGg3TOdgaQSFfGtisO1'
 BASIC_AUTH="${BASIC_AUTH:-on}"
 BASIC_AUTH_USER="${BASIC_AUTH_USER:-admin}"
 BASIC_AUTH_HASH="${BASIC_AUTH_HASH:-$BASIC_AUTH_HASH_DEFAULT}"
 
-mkdir -p "$APP_DIR" "$PROFILES_DIR" "$RUNTIME_DIR" "$JOBS_DIR" "$STATUS_DIR"
+mkdir -p "$APP_DIR" "$PROFILES_DIR" "$RUNTIME_DIR" "$JOBS_DIR" "$STATUS_DIR" "$ERRORS_DIR"
+
+PERSIST_CHANGED=0
+persist_file_if_changed() {
+  persist_candidate="$1"
+  persist_destination="$2"
+  PERSIST_CHANGED=0
+  if [ -f "$persist_destination" ] && cmp -s "$persist_candidate" "$persist_destination"; then
+    rm -f "$persist_candidate"
+    return 0
+  fi
+  persist_tmp="$persist_destination.tmp.$$"
+  if ! cp "$persist_candidate" "$persist_tmp"; then
+    rm -f "$persist_candidate" "$persist_tmp"
+    return 1
+  fi
+  chmod 600 "$persist_tmp" 2>/dev/null || true
+  if ! mv "$persist_tmp" "$persist_destination"; then
+    rm -f "$persist_candidate" "$persist_tmp"
+    return 1
+  fi
+  rm -f "$persist_candidate"
+  PERSIST_CHANGED=1
+}
+
+# Remove interrupted atomic-write leftovers from older or terminated processes.
+rm -f \
+  "$STATE".tmp.* \
+  "$PROFILES_DIR"/p-*.conf.tmp.* \
+  "$PROFILES_DIR"/p-*.source.yaml.tmp.* \
+  "$PROFILES_DIR"/p-*.source.meta.tmp.* \
+  2>/dev/null || true
 
 valid_number() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
@@ -54,7 +86,7 @@ set_profile_context() {
   PROFILE="$PROFILES_DIR/$context_profile_id.conf"
   SOURCE="$PROFILES_DIR/$context_profile_id.source.yaml"
   META="$PROFILES_DIR/$context_profile_id.source.meta"
-  ERROR_FILE="$PROFILES_DIR/$context_profile_id.error.txt"
+  ERROR_FILE="$ERRORS_DIR/$context_profile_id.txt"
   FINAL="$RUNTIME_DIR/$context_profile_id.config.yaml"
 }
 
@@ -184,38 +216,37 @@ EOF
 replace_state_active_profile() {
   replacement_id="$1"
   [ -f "$STATE" ] || return 0
-  replacement_tmp="$STATE.tmp.$$"
+  replacement_tmp="$RUNTIME_DIR/state-active.$$"
   awk -F= -v id="$replacement_id" '
     BEGIN { replaced=0 }
     $1 == "ACTIVE_PROFILE_ID" { print "ACTIVE_PROFILE_ID=" id; replaced=1; next }
     { print }
     END { if (!replaced) print "ACTIVE_PROFILE_ID=" id }
   ' "$STATE" > "$replacement_tmp"
-  chmod 600 "$replacement_tmp" 2>/dev/null || true
-  mv "$replacement_tmp" "$STATE"
+  persist_file_if_changed "$replacement_tmp" "$STATE"
 }
 
 disable_state_runtime() {
   [ -f "$STATE" ] || return 0
-  runtime_tmp="$STATE.tmp.$$"
+  runtime_tmp="$RUNTIME_DIR/state-runtime.$$"
   awk -F= '
     BEGIN { replaced=0 }
     $1 == "RUN_ENABLED" { print "RUN_ENABLED=0"; replaced=1; next }
     { print }
     END { if (!replaced) print "RUN_ENABLED=0" }
   ' "$STATE" > "$runtime_tmp"
-  chmod 600 "$runtime_tmp" 2>/dev/null || true
-  mv "$runtime_tmp" "$STATE"
+  persist_file_if_changed "$runtime_tmp" "$STATE"
 }
 
 move_profile_bundle() {
   old_profile_id="$1" new_profile_id_value="$2"
   [ -f "$PROFILES_DIR/$old_profile_id.conf" ] || return 1
   mv "$PROFILES_DIR/$old_profile_id.conf" "$PROFILES_DIR/$new_profile_id_value.conf"
-  for profile_suffix in source.yaml source.meta error.txt; do
+  for profile_suffix in source.yaml source.meta; do
     [ -e "$PROFILES_DIR/$old_profile_id.$profile_suffix" ] || continue
     mv "$PROFILES_DIR/$old_profile_id.$profile_suffix" "$PROFILES_DIR/$new_profile_id_value.$profile_suffix"
   done
+  [ ! -e "$ERRORS_DIR/$old_profile_id.txt" ] || mv "$ERRORS_DIR/$old_profile_id.txt" "$ERRORS_DIR/$new_profile_id_value.txt"
   [ ! -e "$RUNTIME_DIR/$old_profile_id.config.yaml" ] || mv "$RUNTIME_DIR/$old_profile_id.config.yaml" "$RUNTIME_DIR/$new_profile_id_value.config.yaml"
   ensure_profile_name "$PROFILES_DIR/$new_profile_id_value.conf"
 }
@@ -361,7 +392,7 @@ load_state() {
   PROFILE="$PROFILES_DIR/$ACTIVE_PROFILE_ID.conf"
   SOURCE="$PROFILES_DIR/$ACTIVE_PROFILE_ID.source.yaml"
   META="$PROFILES_DIR/$ACTIVE_PROFILE_ID.source.meta"
-  ERROR_FILE="$PROFILES_DIR/$ACTIVE_PROFILE_ID.error.txt"
+  ERROR_FILE="$ERRORS_DIR/$ACTIVE_PROFILE_ID.txt"
   FINAL="$RUNTIME_DIR/$ACTIVE_PROFILE_ID.config.yaml"
 }
 
@@ -380,11 +411,11 @@ build_webroot() {
   mount -o remount,exec /dev/shm 2>/dev/null || true
   rm -rf "$WEBROOT"
   mkdir -p "$WEBROOT/cgi-bin" "$WEBROOT/assets"
-  for file in _remna.sh remna-profile remna-status remna-config remna-refresh; do
+  for file in _remna.sh remna-profile remna-status remna-config remna-refresh gen-hash; do
     cp "$WEB_ROOT/cgi-bin/$file" "$WEBROOT/cgi-bin/$file"
   done
   chmod 0644 "$WEBROOT/cgi-bin/_remna.sh" 2>/dev/null || true
-  chmod 0755 "$WEBROOT/cgi-bin/remna-profile" "$WEBROOT/cgi-bin/remna-status" "$WEBROOT/cgi-bin/remna-config" "$WEBROOT/cgi-bin/remna-refresh" 2>/dev/null || true
+  chmod 0755 "$WEBROOT/cgi-bin/remna-profile" "$WEBROOT/cgi-bin/remna-status" "$WEBROOT/cgi-bin/remna-config" "$WEBROOT/cgi-bin/remna-refresh" "$WEBROOT/cgi-bin/gen-hash" 2>/dev/null || true
   cp "$WEB_ROOT/index.html" "$WEBROOT/index.html"
   cp "$WEB_ROOT/assets/remna.css" "$WEBROOT/assets/remna.css"
   cp "$WEB_ROOT/assets/remna.js" "$WEBROOT/assets/remna.js"
@@ -632,6 +663,42 @@ route_cleanup() {
   sysctl -w net.ipv4.ip_forward=0 >/dev/null 2>&1 || true
 }
 
+gateway_probe_cleanup() {
+  if command -v nft >/dev/null 2>&1; then
+    nft delete table inet mihomo_gateway 2>/dev/null || true
+  fi
+  if command -v iptables >/dev/null 2>&1; then
+    while iptables -D INPUT -j MIHOMO_GATEWAY_INPUT 2>/dev/null; do :; done
+    iptables -F MIHOMO_GATEWAY_INPUT 2>/dev/null || true
+    iptables -X MIHOMO_GATEWAY_INPUT 2>/dev/null || true
+  fi
+}
+
+gateway_probe_block() {
+  [ "$GATEWAY_PROBE_BLOCKED" = 1 ] && return 0
+  gateway_iface=$(resolve_network_interface)
+  [ -n "$gateway_iface" ] || { log "WARNING: ICMP gateway probe could not resolve the RouterOS interface"; return 1; }
+  gateway_probe_cleanup
+  if grep -q '^nf_tables ' /proc/modules 2>/dev/null; then
+    nft add table inet mihomo_gateway || return 1
+    nft add chain inet mihomo_gateway input "{ type filter hook input priority filter; policy accept; }" || { gateway_probe_cleanup; return 1; }
+    nft add rule inet mihomo_gateway input iifname "$gateway_iface" ip protocol icmp icmp type echo-request drop || { gateway_probe_cleanup; return 1; }
+  else
+    iptables -N MIHOMO_GATEWAY_INPUT || return 1
+    iptables -I INPUT 1 -j MIHOMO_GATEWAY_INPUT || { gateway_probe_cleanup; return 1; }
+    iptables -A MIHOMO_GATEWAY_INPUT -i "$gateway_iface" -p icmp --icmp-type echo-request -j DROP || { gateway_probe_cleanup; return 1; }
+  fi
+  GATEWAY_PROBE_BLOCKED=1
+  event_log INFO system "ICMP gateway probe blocked until Mihomo is running"
+}
+
+gateway_probe_allow() {
+  [ "$GATEWAY_PROBE_BLOCKED" = 0 ] && return 0
+  gateway_probe_cleanup
+  GATEWAY_PROBE_BLOCKED=0
+  event_log INFO system "ICMP gateway probe enabled: Mihomo is running"
+}
+
 route_pre_start() {
   route_iface=$(resolve_network_interface)
   [ -n "$route_iface" ] || return 1
@@ -823,7 +890,7 @@ write_source_meta() {
   response_headers="$1"
   source_http_status="$2"
   source_http_line="$3"
-  meta_tmp="$META.tmp.$$"
+  meta_tmp="$RUNTIME_DIR/meta.$ACTIVE_PROFILE_ID.$$"
   provider_title=$(decode_provider_text "$(response_header_value "$response_headers" profile-title)")
   provider_interval=$(response_header_value "$response_headers" profile-update-interval)
   case "$provider_interval" in
@@ -839,6 +906,17 @@ write_source_meta() {
   subscription_refill_date=$(response_header_value "$response_headers" subscription-refill-date | tr -d '\r\n' | head -c 512)
   announce=$(decode_provider_text "$(response_header_value "$response_headers" announce)")
   inspect_source_vless_state
+  meta_configuration_valid=pending
+  meta_validation_b64=
+  if [ "$FETCH_SOURCE_CHANGED" = 0 ] && [ -f "$META" ]; then
+    previous_configuration_valid=$(awk -F= '$1 == "configuration_valid" { print $2; exit }' "$META" 2>/dev/null || true)
+    case "$previous_configuration_valid" in
+      0|1)
+        meta_configuration_valid=$previous_configuration_valid
+        meta_validation_b64=$(awk -F= '$1 == "validation_b64" { sub(/^[^=]*=/, ""); print; exit }' "$META" 2>/dev/null || true)
+        ;;
+    esac
+  fi
   umask 077
   cat > "$meta_tmp" <<EOF
 fetched_at=$(date -Iseconds)
@@ -846,8 +924,8 @@ fetched_epoch=$(date +%s)
 bytes=$(wc -c < "$SOURCE")
 http_status=$source_http_status
 http_status_line_b64=$(b64_encode "$source_http_line")
-configuration_valid=pending
-validation_b64=
+configuration_valid=$meta_configuration_valid
+validation_b64=$meta_validation_b64
 provider_title_b64=$(b64_encode "$provider_title")
 provider_refresh_seconds=$provider_refresh
 subscription_userinfo_b64=$(b64_encode "$subscription_userinfo")
@@ -858,13 +936,13 @@ announce_b64=$(b64_encode "$announce")
 zero_vless_count=$SOURCE_ZERO_VLESS_COUNT
 zero_vless_entries_b64=$(b64_encode "$SOURCE_ZERO_VLESS_ENTRIES")
 EOF
-  mv "$meta_tmp" "$META"
+  persist_file_if_changed "$meta_tmp" "$META"
 }
 
 update_source_meta_validation() {
   validation_state="$1"
   validation_text="$2"
-  meta_tmp="$META.tmp.$$"
+  meta_tmp="$RUNTIME_DIR/meta-validation.$ACTIVE_PROFILE_ID.$$"
   umask 077
   if [ -f "$META" ]; then
     awk -F= '$1 != "configuration_valid" && $1 != "validation_b64" { print }' "$META" > "$meta_tmp"
@@ -873,7 +951,7 @@ update_source_meta_validation() {
   fi
   printf 'configuration_valid=%s\n' "$validation_state" >> "$meta_tmp"
   printf 'validation_b64=%s\n' "$(b64_encode "$validation_text")" >> "$meta_tmp"
-  mv "$meta_tmp" "$META"
+  persist_file_if_changed "$meta_tmp" "$META"
 }
 
 fetch_source() {
@@ -881,6 +959,7 @@ fetch_source() {
   FETCH_HTTP_LINE=
   FETCH_HTTP_TRACE=
   FETCH_BYTES=0
+  FETCH_SOURCE_CHANGED=0
   FETCH_ERROR=
   url="$(b64_decode_file "$SUB_URL_B64")"
   [ -n "$url" ] || {
@@ -890,7 +969,7 @@ fetch_source() {
   case "$url" in http://*|https://*) ;; *) FETCH_ERROR="Subscription URL must use http(s)"; return 1 ;; esac
   valid_number "$SUB_TIMEOUT_SECONDS" || SUB_TIMEOUT_SECONDS=30
   [ "$SUB_TIMEOUT_SECONDS" -ge 3 ] && [ "$SUB_TIMEOUT_SECONDS" -le 120 ] || SUB_TIMEOUT_SECONDS=30
-  tmp="$SOURCE.tmp.$$"
+  tmp="$RUNTIME_DIR/source.$ACTIVE_PROFILE_ID.$$.yaml"
   response_log="$RUNTIME_DIR/wget-response.$$.log"
   response_headers="$RUNTIME_DIR/wget-response.$$.headers"
   set -- -S -T "$SUB_TIMEOUT_SECONDS" -O "$tmp"
@@ -928,8 +1007,17 @@ EOF
   [ -s "$tmp" ] || { rm -f "$tmp" "$response_headers"; FETCH_ERROR="Subscription response is empty"; return 1; }
   FETCH_BYTES=$(wc -c < "$tmp")
   [ "$FETCH_BYTES" -le 16777216 ] || { rm -f "$tmp" "$response_headers"; FETCH_ERROR="Subscription exceeds 16 MiB"; return 1; }
-  mv "$tmp" "$SOURCE"
-  write_source_meta "$response_headers" "$FETCH_HTTP_CODE" "$FETCH_HTTP_LINE"
+  if ! persist_file_if_changed "$tmp" "$SOURCE"; then
+    rm -f "$response_headers"
+    FETCH_ERROR="Subscription response could not be saved"
+    return 1
+  fi
+  FETCH_SOURCE_CHANGED=$PERSIST_CHANGED
+  if ! write_source_meta "$response_headers" "$FETCH_HTTP_CODE" "$FETCH_HTTP_LINE"; then
+    rm -f "$response_headers"
+    FETCH_ERROR="Subscription metadata could not be saved"
+    return 1
+  fi
   rm -f "$response_headers"
   return 0
 }
@@ -1388,6 +1476,7 @@ MIHOMO_PID=
 RESTART_REQUESTED=0
 STOPPING=0
 ROUTING_ACTIVE=0
+GATEWAY_PROBE_BLOCKED=
 
 reload() {
   RESTART_REQUESTED=1
@@ -1398,6 +1487,7 @@ stop() {
   STOPPING=1
   [ -n "$MIHOMO_PID" ] && kill -KILL "$MIHOMO_PID" 2>/dev/null || true
   route_cleanup
+  gateway_probe_cleanup
   exit 0
 }
 
@@ -1445,7 +1535,11 @@ subscription_worker() {
         current_http_line="$FETCH_HTTP_LINE"
         current_bytes="$FETCH_BYTES"
         write_profile_status "$job_id" running validating fetch "$job_started" 0 "$current_http" "$current_http_line" "$current_bytes" "Response saved; validating configuration" ""
-        event_log INFO "$job_id" "download completed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $current_bytes bytes"
+        if [ "$FETCH_SOURCE_CHANGED" = 1 ]; then
+          event_log INFO "$job_id" "download completed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $current_bytes bytes; saved response changed"
+        else
+          event_log INFO "$job_id" "download completed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $current_bytes bytes; response unchanged, flash write skipped"
+        fi
       else
         write_profile_status "$job_id" running building rebuild "$job_started" 0 "$current_http" "$current_http_line" "$current_bytes" "Building configuration from saved YAML" ""
         event_log INFO "$job_id" "configuration rebuild started"
@@ -1556,6 +1650,7 @@ supervisor() {
   while [ "$STOPPING" = 0 ]; do
     load_state
     if [ "$RUN_ENABLED" != 1 ]; then
+      gateway_probe_block || true
       if [ "$ROUTING_ACTIVE" = 1 ]; then
         route_cleanup
         ROUTING_ACTIVE=0
@@ -1567,9 +1662,10 @@ supervisor() {
     fi
 
     active_id="$ACTIVE_PROFILE_ID"
-    set_profile_context "$active_id" || { sleep 2; continue; }
+    set_profile_context "$active_id" || { gateway_probe_block || true; sleep 2; continue; }
     load_profile
     if [ ! -s "$FINAL" ]; then
+      gateway_probe_block || true
       active_job_state=$(awk -F= '$1 == "STATE" { print $2; exit }' "$STATUS_DIR/$active_id.conf" 2>/dev/null || true)
       if [ ! -f "$JOBS_DIR/$active_id.request" ]; then
         case "$active_job_state" in
@@ -1587,6 +1683,7 @@ supervisor() {
     fi
 
     RESTART_REQUESTED=0
+    gateway_probe_block || true
     route_cleanup
     ROUTING_ACTIVE=0
     load_state
@@ -1608,10 +1705,14 @@ supervisor() {
       kill -TERM "$MIHOMO_PID" 2>/dev/null || true
     else
       [ "$ROUTE_MODE" = redir-tun ] && ROUTING_ACTIVE=1
+      if kill -0 "$MIHOMO_PID" 2>/dev/null; then
+        gateway_probe_allow
+      fi
     fi
     wait "$MIHOMO_PID"
     rc=$?
     MIHOMO_PID=
+    gateway_probe_block || true
     route_cleanup
     ROUTING_ACTIVE=0
     [ "$STOPPING" = 1 ] && break
@@ -1640,10 +1741,14 @@ network_settings_watcher() {
 }
 
 sh "$MIHOMO_DIR/scripts/05-fw-modules.sh" || log "WARNING: firewall backend setup was incomplete"
-for obsolete_error in "$PROFILES_DIR"/p-*.error.txt; do
-  [ -f "$obsolete_error" ] || continue
-  [ "$(cat "$obsolete_error" 2>/dev/null || true)" = "Mihomo panel cache could not be prepared" ] || continue
-  : > "$obsolete_error"
+for persistent_error in "$PROFILES_DIR"/p-*.error.txt; do
+  [ -f "$persistent_error" ] || continue
+  persistent_error_name=${persistent_error##*/}
+  persistent_error_id=${persistent_error_name%.error.txt}
+  if valid_profile_id "$persistent_error_id" && [ -s "$persistent_error" ] && [ ! -s "$ERRORS_DIR/$persistent_error_id.txt" ]; then
+    cp "$persistent_error" "$ERRORS_DIR/$persistent_error_id.txt" 2>/dev/null || true
+  fi
+  rm -f "$persistent_error"
 done
 load_state
 startup_network_signature=$(network_signature)
@@ -1655,6 +1760,7 @@ else
   log "WARNING: Alpine network settings could not be applied"
 fi
 route_cleanup
+gateway_probe_block || log "WARNING: ICMP gateway probe could not be blocked"
 setup_auth
 build_webroot
 httpd -f -p 80 -h "$WEBROOT" -c "$HTTPD_CONF" &

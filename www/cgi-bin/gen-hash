@@ -7,12 +7,12 @@ guard_json
 
 PWD_IN="$(read_body)"
 if [ -z "$PWD_IN" ]; then
-  send_json "400 Bad Request"; printf '{"ok":false,"output":"empty password"}'; exit 0
+  send_json "400 Bad Request"; printf '{"ok":false,"error":"Пароль не задан"}'; exit 0
 fi
 
 HASH="$(printf '%s' "$PWD_IN" | openssl passwd -1 -stdin 2>/dev/null)"
 if [ -z "$HASH" ]; then
-  send_json "500 Internal Server Error"; printf '{"ok":false,"output":"openssl failed"}'; exit 0
+  send_json "500 Internal Server Error"; printf '{"ok":false,"error":"OpenSSL не смог создать хеш"}'; exit 0
 fi
 
 send_json "200 OK"

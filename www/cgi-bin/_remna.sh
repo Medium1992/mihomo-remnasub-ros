@@ -8,11 +8,35 @@ RUNTIME_DIR=/dev/shm/remnasub
 UI_DIR=/etc/mihomo/ui
 JOBS_DIR="$RUNTIME_DIR/jobs"
 STATUS_DIR="$RUNTIME_DIR/status"
+ERRORS_DIR="$RUNTIME_DIR/errors"
 EVENT_LOG="$RUNTIME_DIR/events.log"
 UI_STATUS="$RUNTIME_DIR/ui.status"
 UI_REQUEST="$RUNTIME_DIR/ui.request"
 
-mkdir -p "$JOBS_DIR" "$STATUS_DIR"
+mkdir -p "$JOBS_DIR" "$STATUS_DIR" "$ERRORS_DIR"
+
+PERSIST_CHANGED=0
+persist_file_if_changed() {
+  persist_candidate="$1"
+  persist_destination="$2"
+  PERSIST_CHANGED=0
+  if [ -f "$persist_destination" ] && cmp -s "$persist_candidate" "$persist_destination"; then
+    rm -f "$persist_candidate"
+    return 0
+  fi
+  persist_tmp="$persist_destination.tmp.$$"
+  if ! cp "$persist_candidate" "$persist_tmp"; then
+    rm -f "$persist_candidate" "$persist_tmp"
+    return 1
+  fi
+  chmod 600 "$persist_tmp" 2>/dev/null || true
+  if ! mv "$persist_tmp" "$persist_destination"; then
+    rm -f "$persist_candidate" "$persist_tmp"
+    return 1
+  fi
+  rm -f "$persist_candidate"
+  PERSIST_CHANGED=1
+}
 
 json_headers() {
   echo 'Content-Type: application/json; charset=utf-8'
@@ -138,7 +162,7 @@ PROFILE="$PROFILES_DIR/$ACTIVE_PROFILE_ID.conf"
 SOURCE="$PROFILES_DIR/$ACTIVE_PROFILE_ID.source.yaml"
 FINAL="$RUNTIME_DIR/$ACTIVE_PROFILE_ID.config.yaml"
 META="$PROFILES_DIR/$ACTIVE_PROFILE_ID.source.meta"
-ERROR_FILE="$PROFILES_DIR/$ACTIVE_PROFILE_ID.error.txt"
+ERROR_FILE="$ERRORS_DIR/$ACTIVE_PROFILE_ID.txt"
 
 valid_number() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
