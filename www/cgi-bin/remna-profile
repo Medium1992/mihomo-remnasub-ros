@@ -114,6 +114,22 @@ canonical_ports() {
   '
 }
 
+state_scalar_matches() {
+  [ "$(state_file_get "$STATE" "$1" "$2")" = "$3" ]
+}
+
+state_b64_text_matches() (
+  compare_stored=$(decode_b64_value "$(state_file_get "$STATE" "$1" "$2")" | tr -d '\r')
+  compare_submitted=$(printf '%s' "$3" | tr -d '\r')
+  [ "$compare_stored" = "$compare_submitted" ]
+)
+
+state_b64_ports_match() (
+  compare_stored=$(canonical_ports "$(decode_b64_value "$(state_file_get "$STATE" "$1" "$2")")")
+  compare_submitted=$(canonical_ports "$3")
+  [ "$compare_stored" = "$compare_submitted" ]
+)
+
 profiles_json() {
   first=1
   for file in "$PROFILES_DIR"/p-*.conf; do
@@ -149,7 +165,7 @@ profiles_json() {
     valid_number "$refresh_finished" || refresh_finished=0
     [ "$first" = 1 ] || printf ','
     first=0
-    printf '{"id":"%s","name_b64":"%s","display_name_b64":"%s","url_b64":"%s","refresh_seconds":%s,"effective_refresh_seconds":%s,"local_override_enabled":%s,"source_present":%s,"final_present":%s,"updated_at":%s,"final_updated_at":%s,"configuration_valid":"%s","refresh_state":"%s","refresh_stage":"%s","refresh_action":"%s","refresh_http_status":"%s","refresh_http_line_b64":"%s","refresh_bytes":%s,"refresh_started_at":%s,"refresh_finished_at":%s,"refresh_message_b64":"%s","refresh_validation_b64":"%s","error_b64":"%s"}' \
+    printf '{"id":"%s","name_b64":"%s","display_name_b64":"%s","url_b64":"%s","refresh_seconds":%s,"effective_refresh_seconds":%s,"local_override_enabled":%s,"source_present":%s,"final_present":%s,"updated_at":%s,"final_updated_at":%s,"configuration_valid":"%s","subscription_userinfo_b64":"%s","zero_vless_count":%s,"zero_vless_entries_b64":"%s","refresh_state":"%s","refresh_stage":"%s","refresh_action":"%s","refresh_http_status":"%s","refresh_http_line_b64":"%s","refresh_bytes":%s,"refresh_started_at":%s,"refresh_finished_at":%s,"refresh_message_b64":"%s","refresh_validation_b64":"%s","error_b64":"%s"}' \
       "$id" \
       "$(state_file_get "$file" NAME_B64 "$(b64 "$id")")" \
       "$(profile_effective_name_b64 "$file" "$profile_meta")" \
@@ -162,6 +178,9 @@ profiles_json() {
       "$updated_at" \
       "$final_updated_at" \
       "$(profile_meta_get "$profile_meta" configuration_valid unknown)" \
+      "$(profile_meta_get "$profile_meta" subscription_userinfo_b64)" \
+      "$(number_or "$(profile_meta_get "$profile_meta" zero_vless_count)" 0)" \
+      "$(profile_meta_get "$profile_meta" zero_vless_entries_b64)" \
       "$refresh_state" \
       "$refresh_stage" \
       "$refresh_action" \
@@ -378,6 +397,8 @@ if [ "${REQUEST_METHOD:-GET}" = GET ]; then
   printf '"http_status":"%s",' "$(profile_meta_get "$view_meta" http_status)"
   printf '"http_status_line_b64":"%s",' "$(profile_meta_get "$view_meta" http_status_line_b64)"
   printf '"validation_b64":"%s",' "$(profile_meta_get "$view_meta" validation_b64)"
+  printf '"zero_vless_count":%s,' "$(number_or "$(profile_meta_get "$view_meta" zero_vless_count)" 0)"
+  printf '"zero_vless_entries_b64":"%s",' "$(profile_meta_get "$view_meta" zero_vless_entries_b64)"
   printf '"error_b64":"%s"' "$(b64 "$(cat "$view_error" 2>/dev/null || true)")"
   printf '}}\n'
   exit 0
@@ -566,20 +587,47 @@ EOF
     for network_timeout in "$network_ct_established" "$network_ct_syn_sent" "$network_ct_syn_recv" "$network_ct_fin_wait" "$network_ct_close_wait" "$network_ct_last_ack" "$network_ct_time_wait" "$network_ct_close" "$network_ct_unacknowledged" "$network_ct_udp_stream"; do
       valid_number "$network_timeout" && [ "$network_timeout" -ge 1 ] && [ "$network_timeout" -le 604800 ] || deny 'conntrack timeouts must be 1..604800 seconds'
     done
-    old_panel_signature="$(state_file_get "$STATE" EXTERNAL_UI_PRESET zashboard-cdn)|$(state_file_get "$STATE" EXTERNAL_UI_URL_B64)"
-    new_panel_signature="$ui_preset|$(b64 "$ui_url")"
-    old_runtime_signature="$(state_file_get "$STATE" LISTENER_MODE auto)|$(state_file_get "$STATE" REDIR_PORT 12345)|$(state_file_get "$STATE" TPROXY_PORT 12346)|$(state_file_get "$STATE" EXTERNAL_UI_SECRET_B64)|$(state_file_get "$STATE" MIHOMO_FIND_PROCESS_MODE off)|$(state_file_get "$STATE" MIHOMO_LOG_LEVEL warning)|$(state_file_get "$STATE" MIHOMO_IPV6 0)|$(state_file_get "$STATE" MIHOMO_STORE_SELECTED 1)|$(state_file_get "$STATE" MIHOMO_STORE_FAKE_IP 0)|$(state_file_get "$STATE" MIHOMO_SNIFFER_OVERRIDE 0)|$(state_file_get "$STATE" MIHOMO_SNIFFER_ENABLE 0)|$(state_file_get "$STATE" MIHOMO_SNIFFER_FORCE_DNS_MAPPING 0)|$(state_file_get "$STATE" MIHOMO_SNIFFER_PARSE_PURE_IP 0)|$(state_file_get "$STATE" MIHOMO_SNIFFER_OVERRIDE_DESTINATION 0)|$(canonical_ports "$(decode_b64_value "$(state_file_get "$STATE" MIHOMO_SNIFFER_QUIC_PORTS_B64)")")|$(canonical_ports "$(decode_b64_value "$(state_file_get "$STATE" MIHOMO_SNIFFER_TLS_PORTS_B64)")")|$(canonical_ports "$(decode_b64_value "$(state_file_get "$STATE" MIHOMO_SNIFFER_HTTP_PORTS_B64 ODAKODA4MC04ODgw)")")|$(state_file_get "$STATE" MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION 1)|$(state_file_get "$STATE" MIHOMO_SNIFFER_FORCE_DOMAIN_B64)|$(state_file_get "$STATE" MIHOMO_SNIFFER_SKIP_DOMAIN_B64)|$(state_file_get "$STATE" MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64)|$(state_file_get "$STATE" MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64)"
-    new_runtime_signature="$listener_mode|$redir_port|$tproxy_port|$(b64 "$ui_secret")|$mihomo_find_process_mode|$mihomo_log_level|$mihomo_ipv6|$mihomo_store_selected|$mihomo_store_fake_ip|$mihomo_sniffer_override|$mihomo_sniffer_enable|$mihomo_sniffer_force_dns_mapping|$mihomo_sniffer_parse_pure_ip|$mihomo_sniffer_override_destination|$(canonical_ports "$mihomo_sniffer_quic_ports")|$(canonical_ports "$mihomo_sniffer_tls_ports")|$(canonical_ports "$mihomo_sniffer_http_ports")|$mihomo_sniffer_http_override_destination|$(b64 "$mihomo_sniffer_force_domain")|$(b64 "$mihomo_sniffer_skip_domain")|$(b64 "$mihomo_sniffer_skip_src_address")|$(b64 "$mihomo_sniffer_skip_dst_address")"
+    panel_settings_changed=false
+    state_scalar_matches EXTERNAL_UI_PRESET zashboard-cdn "$ui_preset" || panel_settings_changed=true
+    state_b64_text_matches EXTERNAL_UI_URL_B64 '' "$ui_url" || panel_settings_changed=true
+
+    runtime_settings_changed=false
+    state_scalar_matches LISTENER_MODE auto "$listener_mode" || runtime_settings_changed=true
+    state_scalar_matches REDIR_PORT 12345 "$redir_port" || runtime_settings_changed=true
+    state_scalar_matches TPROXY_PORT 12346 "$tproxy_port" || runtime_settings_changed=true
+    state_b64_text_matches EXTERNAL_UI_SECRET_B64 '' "$ui_secret" || runtime_settings_changed=true
+    state_scalar_matches MIHOMO_FIND_PROCESS_MODE off "$mihomo_find_process_mode" || runtime_settings_changed=true
+    state_scalar_matches MIHOMO_LOG_LEVEL warning "$mihomo_log_level" || runtime_settings_changed=true
+    state_scalar_matches MIHOMO_IPV6 0 "$mihomo_ipv6" || runtime_settings_changed=true
+    state_scalar_matches MIHOMO_STORE_SELECTED 1 "$mihomo_store_selected" || runtime_settings_changed=true
+    state_scalar_matches MIHOMO_STORE_FAKE_IP 0 "$mihomo_store_fake_ip" || runtime_settings_changed=true
+
+    old_sniffer_override=$(sniffer_override_value)
+    [ "$old_sniffer_override" = "$mihomo_sniffer_override" ] || runtime_settings_changed=true
+    if [ "$old_sniffer_override" = 1 ] || [ "$mihomo_sniffer_override" = 1 ]; then
+      state_scalar_matches MIHOMO_SNIFFER_ENABLE 0 "$mihomo_sniffer_enable" || runtime_settings_changed=true
+      state_scalar_matches MIHOMO_SNIFFER_FORCE_DNS_MAPPING 0 "$mihomo_sniffer_force_dns_mapping" || runtime_settings_changed=true
+      state_scalar_matches MIHOMO_SNIFFER_PARSE_PURE_IP 0 "$mihomo_sniffer_parse_pure_ip" || runtime_settings_changed=true
+      state_scalar_matches MIHOMO_SNIFFER_OVERRIDE_DESTINATION 0 "$mihomo_sniffer_override_destination" || runtime_settings_changed=true
+      state_b64_ports_match MIHOMO_SNIFFER_QUIC_PORTS_B64 '' "$mihomo_sniffer_quic_ports" || runtime_settings_changed=true
+      state_b64_ports_match MIHOMO_SNIFFER_TLS_PORTS_B64 '' "$mihomo_sniffer_tls_ports" || runtime_settings_changed=true
+      state_b64_ports_match MIHOMO_SNIFFER_HTTP_PORTS_B64 ODAKODA4MC04ODgw "$mihomo_sniffer_http_ports" || runtime_settings_changed=true
+      state_scalar_matches MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION 1 "$mihomo_sniffer_http_override_destination" || runtime_settings_changed=true
+      state_b64_text_matches MIHOMO_SNIFFER_FORCE_DOMAIN_B64 '' "$mihomo_sniffer_force_domain" || runtime_settings_changed=true
+      state_b64_text_matches MIHOMO_SNIFFER_SKIP_DOMAIN_B64 '' "$mihomo_sniffer_skip_domain" || runtime_settings_changed=true
+      state_b64_text_matches MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64 '' "$mihomo_sniffer_skip_src_address" || runtime_settings_changed=true
+      state_b64_text_matches MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64 '' "$mihomo_sniffer_skip_dst_address" || runtime_settings_changed=true
+    fi
     write_container_settings
     panel_update=false
     core_rebuild=false
     source_refresh=false
-    if [ "$old_panel_signature" != "$new_panel_signature" ]; then
+    if [ "$panel_settings_changed" = true ]; then
       queue_panel_update
       panel_update=true
     fi
     active_id=$(state_file_get "$STATE" ACTIVE_PROFILE_ID "$ACTIVE_PROFILE_ID")
-    if [ "$old_runtime_signature" != "$new_runtime_signature" ] && [ -s "$PROFILES_DIR/$active_id.source.yaml" ]; then
+    if [ "$runtime_settings_changed" = true ] && [ -s "$PROFILES_DIR/$active_id.source.yaml" ]; then
       queue_profile_job "$active_id" rebuild "global settings changed"
       core_rebuild=true
     fi
@@ -609,7 +657,8 @@ local_store_fake_ip=$(form_value local_store_fake_ip)
 local_sniffer_mode=$(form_value local_sniffer_mode)
 use_provider_title=$(form_value use_provider_title)
 use_provider_interval=$(form_value use_provider_interval)
-refresh=$(form_value refresh_seconds)
+  refresh_minutes=$(form_value refresh_minutes)
+  refresh=$(form_value refresh_seconds)
 timeout=$(form_value timeout_seconds)
 insecure=$(form_value insecure_tls)
 
@@ -617,7 +666,12 @@ case "$url" in ''|http://*|https://*) ;; *) deny 'URL must use http(s)' ;; esac
 clean_url=$(printf '%s' "$url" | tr -d '\r\n')
 [ "$clean_url" = "$url" ] || deny 'URL must be one line'
 [ "${#url}" -le 4096 ] || deny 'URL is too long'
-valid_number "$refresh" && [ "$refresh" -ge 30 ] && [ "$refresh" -le 86400 ] || deny 'Refresh interval must be 30..86400 seconds'
+  if [ -n "$refresh_minutes" ]; then
+    valid_number "$refresh_minutes" && [ "$refresh_minutes" -ge 1 ] && [ "$refresh_minutes" -le 1440 ] || deny 'Refresh interval must be 1..1440 minutes'
+    refresh=$((refresh_minutes * 60))
+  else
+    valid_number "$refresh" && [ "$refresh" -ge 30 ] && [ "$refresh" -le 86400 ] || deny 'Refresh interval must be 30..86400 seconds'
+  fi
 valid_number "$timeout" && [ "$timeout" -ge 3 ] && [ "$timeout" -le 120 ] || deny 'Timeout must be 3..120 seconds'
 case "$insecure" in 0|1) ;; *) insecure=0 ;; esac
 case "$local_override_enabled:$use_provider_title:$use_provider_interval" in [01]:[01]:[01]) ;; *) deny 'invalid local override switches' ;; esac
