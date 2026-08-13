@@ -10,8 +10,6 @@
 ![Platforms](https://img.shields.io/badge/arch-amd64%20%7C%20arm64%20%7C%20armv7%20%7C%20armv5-blue)
 [![Telegram](https://img.shields.io/badge/Telegram-group-blue?logo=telegram)](https://t.me/+96HVPF3Ww6o3YTNi)
 
-<p align="center"><img src="./ui-preview.png" width="1000" alt="RemnaSub RoS WebUI"></p>
-
 ## ✨ Features
 
 - 📚 Multiple complete YAML subscriptions with an active profile, manual/periodic refresh, and per-profile settings.
