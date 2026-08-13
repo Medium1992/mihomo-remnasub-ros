@@ -7,6 +7,8 @@
   let model = { state: {}, profiles: [], profile: null };
   let runtime = {};
   let editorProfileId = "";
+  let editorRequestToken = 0;
+  let selectingProfileId = "";
   let sourceYamlProfileId = "";
   let deleteProfileId = "";
   let settingsReady = false;
@@ -60,6 +62,91 @@
     return String(value ?? "").replace(/[&<>"']/g, (character) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
     })[character]);
+  }
+
+  function yamlCommentIndex(line) {
+    let quote = "";
+    for (let index = 0; index < line.length; index += 1) {
+      const character = line[index];
+      if (quote) {
+        if (quote === "\"" && character === "\\") { index += 1; continue; }
+        if (quote === "'" && character === "'" && line[index + 1] === "'") { index += 1; continue; }
+        if (character === quote) quote = "";
+        continue;
+      }
+      if (character === "\"" || character === "'") quote = character;
+      else if (character === "#" && (index === 0 || /\s/.test(line[index - 1]))) return index;
+    }
+    return -1;
+  }
+
+  function yamlMappingColon(value) {
+    let quote = "";
+    for (let index = 0; index < value.length; index += 1) {
+      const character = value[index];
+      if (quote) {
+        if (quote === "\"" && character === "\\") { index += 1; continue; }
+        if (quote === "'" && character === "'" && value[index + 1] === "'") { index += 1; continue; }
+        if (character === quote) quote = "";
+        continue;
+      }
+      if (character === "\"" || character === "'") quote = character;
+      else if (character === ":" && (index === value.length - 1 || /\s/.test(value[index + 1]))) return index;
+    }
+    return -1;
+  }
+
+  function yamlScalarHtml(value) {
+    const match = String(value).match(/^(\s*)([\s\S]*?)(\s*)$/);
+    const leading = match[1];
+    const scalar = match[2];
+    const trailing = match[3];
+    if (!scalar) return escapeHtml(value);
+    let className = "yaml-scalar";
+    if (/^(?:true|false)$/i.test(scalar)) className = "yaml-boolean";
+    else if (/^(?:null|~)$/i.test(scalar)) className = "yaml-null";
+    else if (/^[+-]?(?:0x[0-9a-f]+|0o[0-7]+|(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)$/i.test(scalar)) className = "yaml-number";
+    else if (/^(?:["']|\||>|https?:\/\/)/.test(scalar)) className = "yaml-string";
+    else if (/^[&*!]/.test(scalar)) className = "yaml-anchor";
+    return `${escapeHtml(leading)}<span class="${className}">${escapeHtml(scalar)}</span>${escapeHtml(trailing)}`;
+  }
+
+  function yamlLineHtml(line) {
+    const commentAt = yamlCommentIndex(line);
+    const code = commentAt < 0 ? line : line.slice(0, commentAt);
+    const comment = commentAt < 0 ? "" : line.slice(commentAt);
+    const prefixMatch = code.match(/^(\s*)(-\s+)?/);
+    let html = escapeHtml(prefixMatch[1]);
+    if (prefixMatch[2]) html += `<span class="yaml-list-marker">-${escapeHtml(prefixMatch[2].slice(1))}</span>`;
+    const body = code.slice(prefixMatch[0].length);
+    const colonAt = /^(?:\{|\[)/.test(body) ? -1 : yamlMappingColon(body);
+    if (colonAt >= 0) {
+      html += `<span class="yaml-key">${escapeHtml(body.slice(0, colonAt))}</span>`;
+      html += `<span class="yaml-punctuation">:</span>`;
+      html += yamlScalarHtml(body.slice(colonAt + 1));
+    } else {
+      html += yamlScalarHtml(body);
+    }
+    if (comment) html += `<span class="yaml-comment">${escapeHtml(comment)}</span>`;
+    return html;
+  }
+
+  function renderYamlViewer(viewerId, text) {
+    const viewer = $(viewerId);
+    viewer.innerHTML = String(text || "").replace(/\r\n?/g, "\n").split("\n").map(yamlLineHtml).join("\n");
+  }
+
+  function selectViewerContents(viewer) {
+    viewer.focus();
+    if (typeof viewer.select === "function") {
+      viewer.select();
+      return;
+    }
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(viewer);
+    selection.removeAllRanges();
+    selection.addRange(range);
   }
 
   function profileName(profile) {
@@ -147,6 +234,12 @@
     if (delta < 3600) return `${Math.floor(delta / 60)} мин. назад`;
     if (delta < 86400) return `${Math.floor(delta / 3600)} ч назад`;
     return `${Math.floor(delta / 86400)} дн. назад`;
+  }
+
+  function refreshRelativeTimes() {
+    all("[data-updated-at]").forEach((node) => {
+      node.textContent = formatUpdated(node.dataset.updatedAt);
+    });
   }
 
   function formatBytes(bytes) {
@@ -276,19 +369,18 @@
     if (enabled && openOnEnable) details.open = true;
   }
 
-  async function copyViewer(viewerId) {
+  async function copyViewer(viewerId, message = "Скопировано") {
     const viewer = $(viewerId);
-    const text = viewer.value;
+    const text = "value" in viewer ? viewer.value : viewer.textContent;
     if (!text) return;
-    viewer.focus();
-    viewer.select();
+    selectViewerContents(viewer);
     try {
       if (!navigator.clipboard || !window.isSecureContext) throw new Error("clipboard unavailable");
       await navigator.clipboard.writeText(text);
     } catch (_) {
       if (!document.execCommand("copy")) throw new Error("Не удалось скопировать текст");
     }
-    toast("YAML скопирован");
+    toast(message);
   }
 
   function updateSnifferOverrideState(openOnEnable = false) {
@@ -346,7 +438,7 @@
     let payload;
     try { payload = JSON.parse(result.text); }
     catch (_) { throw new Error("Сервер вернул повреждённый JSON"); }
-    if (payload.ok === false) throw new Error(payload.error || "Операция отклонена");
+    if (payload.ok === false) throw new Error(payload.error || payload.output || "Операция отклонена");
     return payload;
   }
 
@@ -372,68 +464,63 @@
     history.replaceState(null, "", `#${pageName}`);
   }
 
+  function selectSettingsTab(tabName) {
+    all("[data-settings-tab]").forEach((tab) => tab.classList.toggle("active", tab.dataset.settingsTab === tabName));
+    all("[data-settings-panel]").forEach((panel) => panel.classList.toggle("active", panel.dataset.settingsPanel === tabName));
+    $("save-settings").classList.toggle("hidden", tabName === "access");
+  }
+
   function renderSidebar() {
     const active = activeProfile();
-    const running = Boolean(runtime.mihomo_running && runtime.run_enabled && runtime.configured && runtime.final_present);
-    const waiting = Boolean(runtime.run_enabled && !running && active && profileUrl(active));
-    const fingerprint = JSON.stringify([model.profiles.length, model.state.active_profile_id, active && profileName(active), running, waiting]);
+    const switching = Boolean(selectingProfileId);
+    const running = Boolean(!switching && runtime.mihomo_running && runtime.run_enabled && runtime.configured && runtime.final_present);
+    const waiting = Boolean(switching || (runtime.run_enabled && !running && active && profileUrl(active)));
+    const fingerprint = JSON.stringify([model.profiles.length, model.state.active_profile_id, active && profileName(active), running, waiting, switching]);
     if (fingerprint === sidebarFingerprint) return;
     sidebarFingerprint = fingerprint;
     $("nav-profile-count").textContent = String(model.profiles.length);
     $("sidebar-active-profile").textContent = active ? profileName(active) : "Профиль не выбран";
-    $("sidebar-core-title").textContent = running ? "Mihomo работает" : waiting ? "Mihomo запускается" : "Mihomo остановлен";
+    $("sidebar-core-title").textContent = switching ? "Mihomo переключается" : running ? "Mihomo работает" : waiting ? "Mihomo запускается" : "Mihomo остановлен";
     $("sidebar-core-dot").className = running ? "running" : waiting ? "waiting" : "";
   }
 
   function renderActiveRuntime() {
     const active = activeProfile();
-    const configured = Boolean(active && profileUrl(active));
-    const running = Boolean(runtime.mihomo_running && runtime.run_enabled && configured && runtime.final_present);
-    const enabled = Boolean(runtime.run_enabled);
-    const busyLabel = refreshStageLabel(active);
-    const previous = Boolean(runtime.using_previous_config && runtime.final_present);
-    const refreshFailed = Boolean(active && active.refresh_state === "error");
     const fingerprint = JSON.stringify({
       active: model.state.active_profile_id,
-      profile: active && [active.id, active.display_name_b64, active.name_b64, active.url_b64, active.refresh_state, active.refresh_stage, active.refresh_http_status, active.refresh_bytes],
-      listener: model.state.listener_mode,
-      runtime: [configured, running, enabled, runtime.source_present, runtime.final_present, runtime.final_mtime, runtime.final_version, runtime.configuration_valid, runtime.using_previous_config, runtime.error_b64, runtime.event_log_b64, runtime.nft_available],
-      refresh: active && [active.refresh_state, active.refresh_stage, active.refresh_http_status, active.refresh_bytes, active.refresh_message_b64]
+      runtime: [runtime.final_present, runtime.final_mtime, runtime.final_version, runtime.event_log_b64]
     });
     if (fingerprint === activeRuntimeFingerprint) return;
     activeRuntimeFingerprint = fingerprint;
-    const panel = $("active-runtime-details");
-    panel.classList.toggle("hidden", !active);
-    if (!active) return;
+    const yamlButton = $("open-active-runtime-yaml");
+    const canOpenYaml = Boolean(active && runtime.final_present);
+    yamlButton.disabled = !canOpenYaml;
+    yamlButton.title = canOpenYaml ? "Рабочий YAML активной подписки" : "Рабочий YAML ещё не создан";
 
-    $("active-runtime-name").textContent = profileName(active);
-    const chip = $("active-runtime-chip");
-    chip.className = `state-pill ${running ? "running" : enabled && configured ? "waiting" : "idle"}`;
-    chip.innerHTML = `<i></i>${running ? (previous ? "Работает · предыдущая конфигурация" : "Работает") : enabled && configured ? (busyLabel || (refreshFailed ? "Ошибка обновления" : "Запускается")) : "Остановлено"}`;
-    $("active-source-state").textContent = busyLabel || (refreshFailed ? (active.refresh_http_status ? `Ошибка · HTTP ${active.refresh_http_status}` : "Ошибка загрузки") : runtime.source_present ? (runtime.configuration_valid === "0" ? "Получен · отклонён" : "Получен") : "Нет данных");
-    $("active-config-state").textContent = runtime.final_present ? (previous ? "Сохранена предыдущая" : "Проверена") : "Не собрана";
-    $("active-route-mode").textContent = listenerModeLabel(model.state.listener_mode);
-    const yamlDetails = $("active-runtime-yaml-details");
-    yamlDetails.classList.toggle("hidden", !runtime.final_present);
-    if (!runtime.final_present) {
-      yamlDetails.open = false;
-      $("active-runtime-yaml").value = "Файл ещё не создан.";
-      activeRuntimeYamlVersion = "";
-    } else if (yamlDetails.open && activeRuntimeYamlVersion !== `${model.state.active_profile_id}:${runtime.final_version || 0}:${runtime.final_mtime || 0}`) {
-      loadActiveRuntimeYaml().catch(() => {});
-    }
-    const error = busyLabel ? "" : decode(runtime.error_b64);
-    $("active-runtime-error").textContent = error && previous ? `Последнее обновление отклонено. Mihomo продолжает работать с предыдущей конфигурацией.\n\n${error}` : error;
-    $("active-runtime-error").classList.toggle("hidden", !error);
     const events = decode(runtime.event_log_b64);
     const eventsViewer = $("runtime-events");
     const wasAtBottom = eventsViewer.scrollHeight - eventsViewer.scrollTop - eventsViewer.clientHeight < 24;
     if (eventsViewer.value !== (events || "Событий пока нет.")) eventsViewer.value = events || "Событий пока нет.";
     if (wasAtBottom) eventsViewer.scrollTop = eventsViewer.scrollHeight;
     $("runtime-events-state").textContent = events ? "Последние 200 событий" : "Событий пока нет";
+
+    if (!active) {
+      renderYamlViewer("active-runtime-yaml", "Файл ещё не создан.");
+      activeRuntimeYamlVersion = "";
+      if (!$("runtime-yaml-modal").classList.contains("hidden")) closeRuntimeYaml();
+      return;
+    }
+    if (!runtime.final_present) {
+      renderYamlViewer("active-runtime-yaml", "Файл ещё не создан.");
+      activeRuntimeYamlVersion = "";
+      if (!$("runtime-yaml-modal").classList.contains("hidden")) closeRuntimeYaml();
+    } else if (!$("runtime-yaml-modal").classList.contains("hidden") && activeRuntimeYamlVersion !== `${model.state.active_profile_id}:${runtime.final_version || 0}:${runtime.final_mtime || 0}`) {
+      loadActiveRuntimeYaml().catch(() => {});
+    }
   }
 
   function profileHealth(profile) {
+    if (profile.id === selectingProfileId) return { className: "warning busy", label: "Переключение..." };
     const active = profile.id === model.state.active_profile_id;
     const error = decode(profile.error_b64) || (active ? decode(runtime.error_b64) : "");
     const source = Boolean(profile.source_present || (active && runtime.source_present));
@@ -462,8 +549,8 @@
     $("subscriptions-subtitle").textContent = `${profiles.length} ${profiles.length === 1 ? "профиль" : profiles.length > 1 && profiles.length < 5 ? "профиля" : "профилей"}`;
     const fingerprint = JSON.stringify({
       active: model.state.active_profile_id,
+      selecting: selectingProfileId,
       runtime: [runtime.mihomo_running, runtime.run_enabled, runtime.source_present, runtime.final_present, runtime.error_b64],
-      minute: Math.floor(Date.now() / 60000),
       profiles
     });
     if (fingerprint === subscriptionsFingerprint) return;
@@ -471,7 +558,8 @@
     $("subscription-list").innerHTML = profiles.map((profile) => {
       const active = profile.id === model.state.active_profile_id;
       const health = profileHealth(profile);
-      const busy = profileBusy(profile);
+      const switching = Boolean(selectingProfileId);
+      const busy = profileBusy(profile) || switching;
       const hasUrl = Boolean(profileUrl(profile));
       const runEnabled = Boolean(model.state.run_enabled);
       const response = [profile.refresh_http_status ? `HTTP ${profile.refresh_http_status}` : "", profile.refresh_bytes ? formatBytes(profile.refresh_bytes) : ""].filter(Boolean).join(" · ");
@@ -486,12 +574,12 @@
           <div class="subscription-details">
             <div class="subscription-title"><strong>${escapeHtml(profileName(profile))}</strong>${active ? "<mark>выбрана</mark>" : ""}</div>
             <p>${escapeHtml(profileUrl(profile) || "URL не задан")}</p>
-            <div class="subscription-meta"><span>${icon("clock")}${formatUpdated(profile.updated_at)}</span><span>${icon("refresh")}авто: ${formatInterval(profile.effective_refresh_seconds || profile.refresh_seconds)}</span>${profile.local_override_enabled ? `<span>${icon("settings")}локальные параметры</span>` : ""}</div>
+            <div class="subscription-meta"><span>${icon("clock")}<time data-updated-at="${Number(profile.updated_at || 0)}">${formatUpdated(profile.updated_at)}</time></span><span>${icon("refresh")}авто: ${formatInterval(profile.effective_refresh_seconds || profile.refresh_seconds)}</span>${profile.local_override_enabled ? `<span>${icon("settings")}локальные параметры</span>` : ""}</div>
           </div>
           <div class="subscription-actions">
             <span class="subscription-runtime-controls" aria-label="Управление Mihomo">
               <button class="icon-button runtime-start" type="button" data-profile-action="start" data-profile-id="${escapeHtml(profile.id)}" title="${active ? (runEnabled ? "Mihomo уже запущен" : "Запустить Mihomo с этой подпиской") : "Сначала выберите подписку"}"${active && hasUrl && !runEnabled && !busy ? "" : " disabled"}>${icon("play")}</button>
-              <button class="icon-button runtime-stop" type="button" data-profile-action="stop" data-profile-id="${escapeHtml(profile.id)}" title="${active ? (runEnabled ? "Остановить Mihomo" : "Mihomo уже остановлен") : "Сначала выберите подписку"}"${active && runEnabled ? "" : " disabled"}>${icon("stop")}</button>
+              <button class="icon-button runtime-stop" type="button" data-profile-action="stop" data-profile-id="${escapeHtml(profile.id)}" title="${active ? (runEnabled ? "Остановить Mihomo" : "Mihomo уже остановлен") : "Сначала выберите подписку"}"${active && runEnabled && !switching ? "" : " disabled"}>${icon("stop")}</button>
             </span>
             <button class="icon-button" type="button" data-profile-action="edit" data-profile-id="${escapeHtml(profile.id)}" title="Настройки">${icon("settings")}</button>
             <button class="icon-button${busy ? " loading" : ""}" type="button" data-profile-action="refresh" data-profile-id="${escapeHtml(profile.id)}" title="${hasUrl ? (busy ? "Обновление выполняется" : "Обновить сейчас") : "Сначала укажите URL"}"${hasUrl && !busy ? "" : " disabled"}>${icon("refresh")}</button>
@@ -607,9 +695,27 @@
 
   async function selectProfile(profileId) {
     if (!profileId || profileId === model.state.active_profile_id) return;
-    await send({ action: "select", profile_id: profileId });
-    await load();
-    toast("Активная подписка изменена");
+    const previousProfileId = model.state.active_profile_id;
+    selectingProfileId = profileId;
+    model.state.active_profile_id = profileId;
+    subscriptionsFingerprint = "";
+    sidebarFingerprint = "";
+    renderSubscriptions();
+    renderSidebar();
+    try {
+      await send({ action: "select", profile_id: profileId });
+      selectingProfileId = "";
+      await load({ quiet: true });
+      toast("Активная подписка изменена");
+    } catch (error) {
+      selectingProfileId = "";
+      model.state.active_profile_id = previousProfileId;
+      subscriptionsFingerprint = "";
+      sidebarFingerprint = "";
+      renderSubscriptions();
+      renderSidebar();
+      throw error;
+    }
   }
 
   async function setRuntime(action, profileId) {
@@ -667,7 +773,9 @@
 
   function createProfile() {
     showPage("subscriptions");
+    editorRequestToken += 1;
     editorProfileId = "";
+    document.querySelector(".profile-modal").classList.remove("loading");
     $("profile-id").value = "";
     $("editor-title").textContent = "Новая подписка";
     $("profile-name").value = "Новая подписка";
@@ -693,10 +801,7 @@
     $("profile-name").focus();
   }
 
-  async function openEditor(profileId) {
-    const details = await requestJson(`/cgi-bin/remna-profile?profile_id=${encodeURIComponent(profileId)}`);
-    const profile = details.profile;
-    editorProfileId = profile.id;
+  function populateEditor(profile) {
     $("profile-id").value = profile.id;
     $("editor-title").textContent = profileLocalName(profile);
     $("profile-name").value = profileLocalName(profile);
@@ -718,12 +823,31 @@
     $("profile-override").value = decode(profile.local_override_b64);
     $("profile-local-details").open = false;
     updateLocalOverrideState();
+  }
+
+  async function openEditor(profileId) {
+    const requestToken = ++editorRequestToken;
+    const listedProfile = profileById(profileId);
+    editorProfileId = profileId;
+    $("editor-title").textContent = listedProfile ? profileName(listedProfile) : "Настройки подписки";
     $("profile-modal-layer").classList.remove("hidden");
-    $("profile-name").focus();
+    document.querySelector(".profile-modal").classList.add("loading");
+    try {
+      const details = await requestJson(`/cgi-bin/remna-profile?profile_id=${encodeURIComponent(profileId)}&compact=1`);
+      if (requestToken !== editorRequestToken || editorProfileId !== profileId) return;
+      populateEditor(details.profile);
+      document.querySelector(".profile-modal").classList.remove("loading");
+      $("profile-name").focus();
+    } catch (error) {
+      if (requestToken === editorRequestToken) closeEditor();
+      throw error;
+    }
   }
 
   function closeEditor() {
+    editorRequestToken += 1;
     editorProfileId = "";
+    document.querySelector(".profile-modal").classList.remove("loading");
     $("profile-modal-layer").classList.add("hidden");
   }
 
@@ -773,11 +897,11 @@
     $("source-yaml-title").textContent = `Полученный YAML · ${profileName(profile)}`;
     const sourceState = [profile.refresh_http_status ? `HTTP ${profile.refresh_http_status}` : "", profile.refresh_bytes ? formatBytes(profile.refresh_bytes) : "", profile.refresh_state === "error" && profile.configuration_valid !== "0" ? "сохранён предыдущий ответ" : profile.configuration_valid === "0" ? "рабочая конфигурация отклонена" : profile.configuration_valid === "1" ? "проверка пройдена" : ""].filter(Boolean).join(" · ");
     $("source-yaml-subtitle").textContent = sourceState || "Последний HTTP-ответ источника без локальных изменений";
-    $("source-yaml-viewer").value = "Загрузка...";
+    renderYamlViewer("source-yaml-viewer", "Загрузка...");
     $("source-yaml-modal").classList.remove("hidden");
     const result = await request(`/cgi-bin/remna-config?kind=source&profile_id=${encodeURIComponent(profileId)}`);
     if (sourceYamlProfileId !== profileId) return;
-    $("source-yaml-viewer").value = result.text || "Файл ещё не создан.";
+    renderYamlViewer("source-yaml-viewer", result.text || "Файл ещё не создан.");
     $("source-yaml-viewer").scrollTop = 0;
   }
 
@@ -790,12 +914,57 @@
     const profileId = model.state.active_profile_id;
     if (!profileId || !runtime.final_present) return;
     const version = `${profileId}:${runtime.final_version || 0}:${runtime.final_mtime || 0}`;
-    $("active-runtime-yaml").value = "Загрузка...";
+    renderYamlViewer("active-runtime-yaml", "Загрузка...");
     const result = await request(`/cgi-bin/remna-config?kind=final&profile_id=${encodeURIComponent(profileId)}`);
     if (profileId !== model.state.active_profile_id) return;
     activeRuntimeYamlVersion = version;
-    $("active-runtime-yaml").value = result.text || "Файл ещё не создан.";
+    renderYamlViewer("active-runtime-yaml", result.text || "Файл ещё не создан.");
     $("active-runtime-yaml").scrollTop = 0;
+  }
+
+  async function openRuntimeYaml() {
+    const profile = activeProfile();
+    if (!profile || !runtime.final_present) throw new Error("Рабочий YAML ещё не создан");
+    $("runtime-yaml-title").textContent = `Рабочий YAML · ${profileName(profile)}`;
+    $("runtime-yaml-subtitle").textContent = "Итоговая конфигурация активной подписки со всеми переопределениями";
+    $("runtime-yaml-modal").classList.remove("hidden");
+    await loadActiveRuntimeYaml();
+  }
+
+  function closeRuntimeYaml() {
+    $("runtime-yaml-modal").classList.add("hidden");
+  }
+
+  function openRuntimeEvents() {
+    const viewer = $("runtime-events");
+    $("runtime-events-modal").classList.remove("hidden");
+    viewer.scrollTop = viewer.scrollHeight;
+  }
+
+  function closeRuntimeEvents() {
+    $("runtime-events-modal").classList.add("hidden");
+  }
+
+  async function generateBasicAuthHash() {
+    const password = $("basic-auth-password").value;
+    const confirmation = $("basic-auth-password-confirm").value;
+    if (!password) throw new Error("Введите новый пароль");
+    if (password !== confirmation) throw new Error("Пароли не совпадают");
+    const button = $("generate-basic-auth-hash");
+    button.disabled = true;
+    try {
+      const payload = await requestJson("/cgi-bin/gen-hash", {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=UTF-8" },
+        body: password
+      });
+      if (!payload.hash) throw new Error("Сервер не вернул хеш");
+      $("basic-auth-hash").value = payload.hash;
+      $("basic-auth-hash-result").classList.remove("hidden");
+      toast("Хеш создан");
+    } finally {
+      button.disabled = false;
+    }
   }
 
   function askDelete(profileId) {
@@ -889,10 +1058,7 @@
   }
 
   all("[data-page-link]").forEach((button) => button.addEventListener("click", () => showPage(button.dataset.pageLink)));
-  all("[data-settings-tab]").forEach((button) => button.addEventListener("click", () => {
-    all("[data-settings-tab]").forEach((tab) => tab.classList.toggle("active", tab === button));
-    all("[data-settings-panel]").forEach((panel) => panel.classList.toggle("active", panel.dataset.settingsPanel === button.dataset.settingsTab));
-  }));
+  all("[data-settings-tab]").forEach((button) => button.addEventListener("click", () => selectSettingsTab(button.dataset.settingsTab)));
   all('input[name="listener-mode"]').forEach((input) => input.addEventListener("change", updateListenerPortFields));
   $("external-ui-preset").addEventListener("change", () => {
     updateExternalUIPreset();
@@ -907,6 +1073,12 @@
     input.type = reveal ? "text" : "password";
     $("toggle-external-ui-secret").title = reveal ? "Скрыть пароль" : "Показать пароль";
   });
+  all("[data-toggle-password]").forEach((button) => button.addEventListener("click", () => {
+    const input = $(button.dataset.togglePassword);
+    const reveal = input.type === "password";
+    input.type = reveal ? "text" : "password";
+    button.title = reveal ? "Скрыть пароль" : "Показать пароль";
+  }));
   all("[data-open-mihomo]").forEach((button) => button.addEventListener("click", openMihomo));
   $("add-profile").addEventListener("click", protectedAction(createProfile));
   $("empty-add-profile").addEventListener("click", protectedAction(createProfile));
@@ -934,8 +1106,12 @@
     event.preventDefault();
     await selectProfile(card.dataset.profileRow);
   }));
-  $("settings-form").addEventListener("input", () => { settingsDirty = true; });
-  $("settings-form").addEventListener("change", () => { settingsDirty = true; });
+  $("settings-form").addEventListener("input", (event) => {
+    if (!event.target.closest('[data-settings-panel="access"]')) settingsDirty = true;
+  });
+  $("settings-form").addEventListener("change", (event) => {
+    if (!event.target.closest('[data-settings-panel="access"]')) settingsDirty = true;
+  });
   $("add-global-header").addEventListener("click", () => {
     $("global-header-rows").insertAdjacentHTML("beforeend", headerRow({ key: "", value: "", required: false }));
     settingsDirty = true;
@@ -972,24 +1148,45 @@
   $("profile-form").addEventListener("submit", protectedAction(saveProfile));
   $("close-editor").addEventListener("click", closeEditor);
   $("cancel-editor").addEventListener("click", closeEditor);
-  $("active-runtime-yaml-details").addEventListener("toggle", protectedAction(async () => {
-    if ($("active-runtime-yaml-details").open) await loadActiveRuntimeYaml();
+  $("open-active-runtime-yaml").addEventListener("click", protectedAction(openRuntimeYaml));
+  $("open-runtime-events").addEventListener("click", openRuntimeEvents);
+  $("close-runtime-yaml").addEventListener("click", closeRuntimeYaml);
+  $("done-runtime-yaml").addEventListener("click", closeRuntimeYaml);
+  $("close-runtime-events").addEventListener("click", closeRuntimeEvents);
+  $("done-runtime-events").addEventListener("click", closeRuntimeEvents);
+  $("copy-active-runtime-yaml").addEventListener("click", protectedAction(() => copyViewer("active-runtime-yaml", "Рабочий YAML скопирован")));
+  $("copy-runtime-events").addEventListener("click", protectedAction(() => copyViewer("runtime-events", "События скопированы")));
+  $("copy-source-yaml").addEventListener("click", protectedAction(() => copyViewer("source-yaml-viewer", "Полученный YAML скопирован")));
+  $("generate-basic-auth-hash").addEventListener("click", protectedAction(generateBasicAuthHash));
+  $("copy-basic-auth-hash").addEventListener("click", protectedAction(() => copyViewer("basic-auth-hash", "Хеш скопирован")));
+  ["basic-auth-password", "basic-auth-password-confirm"].forEach((id) => $(id).addEventListener("input", () => {
+    $("basic-auth-hash-result").classList.add("hidden");
+    $("basic-auth-hash").value = "";
   }));
-  $("copy-active-runtime-yaml").addEventListener("click", protectedAction(() => copyViewer("active-runtime-yaml")));
-  $("copy-runtime-events").addEventListener("click", protectedAction(() => copyViewer("runtime-events")));
-  $("copy-source-yaml").addEventListener("click", protectedAction(() => copyViewer("source-yaml-viewer")));
   $("close-source-yaml").addEventListener("click", closeSourceYaml);
   $("done-source-yaml").addEventListener("click", closeSourceYaml);
   $("delete-cancel").addEventListener("click", closeDelete);
   $("delete-confirm").addEventListener("click", protectedAction(confirmDelete));
   document.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a" && event.target.classList.contains("yaml-viewer")) {
+      event.preventDefault();
+      selectViewerContents(event.target);
+      return;
+    }
     if (event.key !== "Escape") return;
     if (!$("delete-modal").classList.contains("hidden")) closeDelete();
+    else if (!$("runtime-events-modal").classList.contains("hidden")) closeRuntimeEvents();
+    else if (!$("runtime-yaml-modal").classList.contains("hidden")) closeRuntimeYaml();
     else if (!$("source-yaml-modal").classList.contains("hidden")) closeSourceYaml();
     else if (!$("profile-modal-layer").classList.contains("hidden")) closeEditor();
   });
 
   const initialPage = location.hash.slice(1);
   showPage(initialPage === "settings" ? "settings" : "subscriptions");
+  window.setInterval(refreshRelativeTimes, 15000);
+  window.addEventListener("focus", refreshRelativeTimes);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshRelativeTimes();
+  });
   load().catch(() => {}).finally(() => schedulePoll(anyBackgroundWork() ? 900 : 5000));
 })();
