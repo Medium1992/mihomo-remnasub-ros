@@ -742,6 +742,83 @@ decode_provider_text() {
   printf '%s' "$provider_text" | tr -d '\r\n' | head -c 2048
 }
 
+inspect_source_vless_state() {
+  source_state_file="$RUNTIME_DIR/source-vless-state.$$.txt"
+  SOURCE_ZERO_VLESS_COUNT=0
+  SOURCE_ZERO_VLESS_ENTRIES=
+  awk '
+    function trim(value) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      gsub(/^"|"$/, "", value)
+      gsub(/^\047|\047$/, "", value)
+      return value
+    }
+    function indent(line, copy) {
+      copy=line
+      sub(/[^ ].*$/, "", copy)
+      return length(copy)
+    }
+    function field(line, key, value, pattern) {
+      pattern="(^|[,{[:space:]])" key "[[:space:]]*:"
+      if (!match(line, pattern)) return ""
+      value=substr(line, RSTART + RLENGTH)
+      sub(/^[[:space:]]+/, "", value)
+      if (substr(value, 1, 1) == "\"") {
+        value=substr(value, 2)
+        sub(/\".*/, "", value)
+      } else if (substr(value, 1, 1) == "\047") {
+        value=substr(value, 2)
+        sub(/\047.*/, "", value)
+      } else {
+        sub(/[},].*$/, "", value)
+      }
+      return trim(value)
+    }
+    function zero_uuid(value, compact) {
+      compact=tolower(trim(value))
+      gsub(/-/, "", compact)
+      return length(compact) == 32 && compact ~ /^0+$/
+    }
+    function flush(label) {
+      if (tolower(proxy_type) == "vless" && zero_uuid(proxy_uuid)) {
+        label=proxy_name
+        if (label == "") label="VLESS #" (found + 1)
+        print label
+        found++
+      }
+      proxy_name=proxy_type=proxy_uuid=""
+    }
+    /^[^[:space:]#][^:]*:/ {
+      if ($0 ~ /^proxies[[:space:]]*:/) {
+        flush()
+        in_proxies=1
+        item_indent=-1
+        next
+      }
+      if (in_proxies) {
+        flush()
+        in_proxies=0
+      }
+    }
+    in_proxies {
+      line=$0
+      if (line ~ /^[[:space:]]*-[[:space:]]*/) {
+        current_indent=indent(line)
+        if (item_indent < 0) item_indent=current_indent
+        if (current_indent == item_indent) flush()
+      }
+      value=field(line, "name"); if (value != "") proxy_name=value
+      value=field(line, "type"); if (value != "") proxy_type=value
+      value=field(line, "uuid"); if (value != "") proxy_uuid=value
+    }
+    END { if (in_proxies) flush() }
+  ' "$SOURCE" > "$source_state_file" 2>/dev/null || : > "$source_state_file"
+  SOURCE_ZERO_VLESS_COUNT=$(wc -l < "$source_state_file" | tr -d ' ')
+  case "$SOURCE_ZERO_VLESS_COUNT" in ''|*[!0-9]*) SOURCE_ZERO_VLESS_COUNT=0 ;; esac
+  SOURCE_ZERO_VLESS_ENTRIES=$(head -n 100 "$source_state_file")
+  rm -f "$source_state_file"
+}
+
 write_source_meta() {
   response_headers="$1"
   source_http_status="$2"
@@ -761,6 +838,7 @@ write_source_meta() {
   support_url=$(response_header_value "$response_headers" support-url | tr -d '\r\n' | head -c 2048)
   subscription_refill_date=$(response_header_value "$response_headers" subscription-refill-date | tr -d '\r\n' | head -c 512)
   announce=$(decode_provider_text "$(response_header_value "$response_headers" announce)")
+  inspect_source_vless_state
   umask 077
   cat > "$meta_tmp" <<EOF
 fetched_at=$(date -Iseconds)
@@ -777,6 +855,8 @@ profile_web_page_url_b64=$(b64_encode "$profile_web_page_url")
 support_url_b64=$(b64_encode "$support_url")
 subscription_refill_date_b64=$(b64_encode "$subscription_refill_date")
 announce_b64=$(b64_encode "$announce")
+zero_vless_count=$SOURCE_ZERO_VLESS_COUNT
+zero_vless_entries_b64=$(b64_encode "$SOURCE_ZERO_VLESS_ENTRIES")
 EOF
   mv "$meta_tmp" "$META"
 }
