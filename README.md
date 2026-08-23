@@ -162,9 +162,23 @@ The subscription remains a complete configuration. Only managed sections are cha
 - controller/UI keys (`external-controller*`, `external-ui*`, `external-doh-server`, and `secret`) are replaced locally;
 - `find-process-mode`, `log-level`, `ipv6`, `profile.store-selected`, and `profile.store-fake-ip` are managed globally;
 - source `sniffer` is preserved unless its override is explicitly enabled;
-- per-profile extra YAML replaces same-name top-level sections before mandatory container overrides.
+- `mode` is taken from the subscription until a specific one (`rule`, `global`, `direct`) is selected in the settings;
+- the shared YAML from the settings and the profile's own YAML replace same-name top-level sections before mandatory container overrides.
 
-Precedence: **source YAML → per-profile YAML → managed global values → local listeners and controller**.
+Precedence: **source YAML → shared YAML → per-profile YAML → managed global values → local listeners and controller**.
+
+### Shared and per-profile YAML
+
+The shared YAML is written once under **Settings → Overrides** and is applied to every subscription. The profile's own YAML is applied after it, so a subscription can undo a shared rule for its own section.
+
+Overrides **replace a whole top-level section rather than merging into it**. Override `dns` and nothing survives from the original section but what you wrote, so spell the block out in full. The preset buttons above the editor insert ready-made sections: DoH resolvers, pinning their addresses, LAN access, geodata, connection tuning.
+
+Two formatting rules are checked before saving, because both break the parser:
+
+- a list at the top level (`- MATCH,DIRECT` with no key above it) — items must be indented under their section, otherwise a line such as `- IP-CIDR,2001:db8::/32,PROXY` is indistinguishable from the start of a new key;
+- tabs used for indentation, which YAML does not allow.
+
+Keys the container sets itself after the override is applied are pointless to write here: `find-process-mode`, `log-level`, `ipv6`, `profile`, `listeners`, `redir-port`, `tproxy-port`, `tun`, `external-controller*`, `external-ui*`, `secret`. The editor flags them as you type.
 
 ## 🔀 Inbound Modes
 

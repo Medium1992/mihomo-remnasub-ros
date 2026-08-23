@@ -128,6 +128,10 @@ function bootstrap() {
     ui.settingsDirty = true;
   });
   $("mihomo-sniffer-enable").addEventListener("change", () => settings.updateSnifferOverrideState());
+  settings.renderPresetButtons("global-override-presets", "global-override");
+  settings.renderPresetButtons("profile-override-presets", "profile-override");
+  settings.watchOverrideProblems("global-override", "global-override-problem");
+  settings.watchOverrideProblems("profile-override", "profile-override-problem");
   $("save-settings").addEventListener("click", protectedAction(settings.saveSettings));
   $("reset-network-timeouts").addEventListener("click", () => {
     Object.entries(settings.networkTimeoutDefaults).forEach(([id, value]) => { $(id).value = value; });

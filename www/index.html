@@ -167,6 +167,7 @@
             <section class="settings-section settings-panel" data-settings-panel="override">
               <div class="settings-title"><h2>Переопределение параметров Mihomo</h2><p>Управляемые значения применяются поверх любой выбранной подписки</p></div>
               <div class="settings-grid">
+                <label class="setting-row setting-select-row"><span><b>Режим маршрутизации</b><small>Ключ <code>mode</code>. «Как в подписке» — не трогать значение, присланное панелью</small></span><select id="mihomo-mode"><option value="source">Как в подписке</option><option value="rule">rule</option><option value="global">global</option><option value="direct">direct</option></select></label>
                 <label class="setting-row setting-select-row"><span><b>Поиск процессов</b><small>В отдельной ОС контейнера обычно не нужен</small></span><select id="mihomo-find-process-mode"><option value="off">off</option><option value="strict">strict</option><option value="always">always</option></select></label>
                 <label class="setting-row setting-select-row"><span><b>Уровень журнала</b><small>Локальный log-level ядра Mihomo</small></span><select id="mihomo-log-level"><option value="silent">silent</option><option value="error">error</option><option value="warning">warning</option><option value="info">info</option><option value="debug">debug</option></select></label>
                 <label class="setting-row switch-row"><span><b>IPv6 в Mihomo</b><small>Не зависит от IPv6 сетевого стека Alpine</small></span><input id="mihomo-ipv6" type="checkbox"><i></i></label>
@@ -207,6 +208,16 @@
                   </div>
                 </div>
               </details>
+
+              <div class="settings-title override-subtitle"><h2>Общий YAML</h2><p>Накладывается на каждую подписку до её локального YAML</p></div>
+              <div class="override-editor">
+                <div class="override-toolbar">
+                  <span class="override-hint">Верхнеуровневая секция заменяется целиком, а не сливается. Ключи <code>find-process-mode</code>, <code>log-level</code>, <code>ipv6</code>, <code>profile</code>, <code>listeners</code>, <code>external-controller</code> и <code>secret</code> задаёт контейнер — здесь они игнорируются.</span>
+                  <span class="override-presets" id="global-override-presets"></span>
+                </div>
+                <textarea id="global-override" rows="10" spellcheck="false" placeholder="dns:&#10;  enable: true"></textarea>
+                <p class="override-problem hidden" id="global-override-problem"></p>
+              </div>
             </section>
 
             <section class="settings-section settings-panel" data-settings-panel="appearance">
@@ -295,6 +306,7 @@
             <div class="header-rows" id="profile-header-rows"></div>
           </div>
           <div class="profile-local-section local-managed-grid">
+            <label><span>mode</span><select id="profile-local-mode"><option value="inherit">Как в общих настройках</option><option value="source">Как в подписке</option><option value="rule">rule</option><option value="global">global</option><option value="direct">direct</option></select></label>
             <label><span>find-process-mode</span><select id="profile-local-find-process"><option value="inherit">Как в общих настройках</option><option value="off">off</option><option value="strict">strict</option><option value="always">always</option></select></label>
             <label><span>log-level</span><select id="profile-local-log-level"><option value="inherit">Как в общих настройках</option><option value="silent">silent</option><option value="error">error</option><option value="warning">warning</option><option value="info">info</option><option value="debug">debug</option></select></label>
             <label><span>IPv6</span><select id="profile-local-ipv6"><option value="inherit">Как в общих настройках</option><option value="0">Выключить</option><option value="1">Включить</option></select></label>
@@ -302,7 +314,9 @@
             <label><span>store-fake-ip</span><select id="profile-local-store-fake-ip"><option value="inherit">Как в общих настройках</option><option value="0">false</option><option value="1">true</option></select></label>
             <label><span>Sniffer</span><select id="profile-local-sniffer"><option value="inherit">Как в общих настройках</option><option value="source">Оставить из подписки</option><option value="disabled">Выключить</option></select></label>
           </div>
+            <div class="override-toolbar"><span class="override-hint">Секция заменяется целиком. Значения выше в этом блоке имеют приоритет над написанным здесь.</span><span class="override-presets" id="profile-override-presets"></span></div>
           <label class="profile-local-yaml"><span><b>Дополнительный YAML</b><small>Верхнеуровневые секции заменяют одноимённые секции подписки</small></span><textarea class="code-editor" id="profile-override" rows="11" spellcheck="false" placeholder="dns:&#10;  enable: true"></textarea></label>
+            <p class="override-problem hidden" id="profile-override-problem"></p>
         </div></details>
       </form>
       <footer class="modal-actions"><button class="secondary-button" type="button" id="cancel-editor">Отмена</button><button class="primary-button" type="submit" form="profile-form"><svg><use href="#i-check"/></svg>Сохранить</button></footer>

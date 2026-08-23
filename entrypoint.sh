@@ -352,6 +352,7 @@ load_state() {
   REDIR_PORT=12345 TPROXY_PORT=12346
   MIHOMO_FIND_PROCESS_MODE=off MIHOMO_LOG_LEVEL=warning MIHOMO_IPV6=0
   MIHOMO_STORE_SELECTED=1 MIHOMO_STORE_FAKE_IP=0
+  MIHOMO_MODE=source GLOBAL_OVERRIDE_B64=
   MIHOMO_SNIFFER_MODE=source MIHOMO_SNIFFER_OVERRIDE=0 MIHOMO_SNIFFER_ENABLE=0
   MIHOMO_SNIFFER_FORCE_DNS_MAPPING=0 MIHOMO_SNIFFER_PARSE_PURE_IP=0 MIHOMO_SNIFFER_OVERRIDE_DESTINATION=0
   MIHOMO_SNIFFER_QUIC_PORTS_B64= MIHOMO_SNIFFER_TLS_PORTS_B64= MIHOMO_SNIFFER_HTTP_PORTS_B64=ODAKODA4MC04ODgw
@@ -372,7 +373,7 @@ load_state() {
     key=${line%%=*}
     value=${line#*=}
     case "$key" in
-      ACTIVE_PROFILE_ID|RUN_ENABLED|GLOBAL_HEADERS_B64|LISTENER_MODE|REDIR_PORT|TPROXY_PORT|MIHOMO_FIND_PROCESS_MODE|MIHOMO_LOG_LEVEL|MIHOMO_IPV6|MIHOMO_STORE_SELECTED|MIHOMO_STORE_FAKE_IP|MIHOMO_SNIFFER_MODE|MIHOMO_SNIFFER_OVERRIDE|MIHOMO_SNIFFER_ENABLE|MIHOMO_SNIFFER_FORCE_DNS_MAPPING|MIHOMO_SNIFFER_PARSE_PURE_IP|MIHOMO_SNIFFER_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_QUIC_PORTS_B64|MIHOMO_SNIFFER_TLS_PORTS_B64|MIHOMO_SNIFFER_HTTP_PORTS_B64|MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_FORCE_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64|MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64|EXTERNAL_UI_PRESET|EXTERNAL_UI_URL_B64|EXTERNAL_UI_SECRET_B64|NETWORK_DISABLE_IPV6|NETWORK_QDISC|NETWORK_DISABLE_MULTICAST|NETWORK_CT_ESTABLISHED|NETWORK_CT_SYN_SENT|NETWORK_CT_SYN_RECV|NETWORK_CT_FIN_WAIT|NETWORK_CT_CLOSE_WAIT|NETWORK_CT_LAST_ACK|NETWORK_CT_TIME_WAIT|NETWORK_CT_CLOSE|NETWORK_CT_UNACKNOWLEDGED|NETWORK_CT_UDP_STREAM)
+      ACTIVE_PROFILE_ID|RUN_ENABLED|GLOBAL_HEADERS_B64|GLOBAL_OVERRIDE_B64|MIHOMO_MODE|LISTENER_MODE|REDIR_PORT|TPROXY_PORT|MIHOMO_FIND_PROCESS_MODE|MIHOMO_LOG_LEVEL|MIHOMO_IPV6|MIHOMO_STORE_SELECTED|MIHOMO_STORE_FAKE_IP|MIHOMO_SNIFFER_MODE|MIHOMO_SNIFFER_OVERRIDE|MIHOMO_SNIFFER_ENABLE|MIHOMO_SNIFFER_FORCE_DNS_MAPPING|MIHOMO_SNIFFER_PARSE_PURE_IP|MIHOMO_SNIFFER_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_QUIC_PORTS_B64|MIHOMO_SNIFFER_TLS_PORTS_B64|MIHOMO_SNIFFER_HTTP_PORTS_B64|MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_FORCE_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64|MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64|EXTERNAL_UI_PRESET|EXTERNAL_UI_URL_B64|EXTERNAL_UI_SECRET_B64|NETWORK_DISABLE_IPV6|NETWORK_QDISC|NETWORK_DISABLE_MULTICAST|NETWORK_CT_ESTABLISHED|NETWORK_CT_SYN_SENT|NETWORK_CT_SYN_RECV|NETWORK_CT_FIN_WAIT|NETWORK_CT_CLOSE_WAIT|NETWORK_CT_LAST_ACK|NETWORK_CT_TIME_WAIT|NETWORK_CT_CLOSE|NETWORK_CT_UNACKNOWLEDGED|NETWORK_CT_UDP_STREAM)
         export "$key=$value"
         ;;
     esac
@@ -383,6 +384,7 @@ load_state() {
   case "$NETWORK_QDISC" in fq_codel|cake|codel|sfq|pfifo|bfifo|system) ;; *) NETWORK_QDISC=fq_codel ;; esac
   case "$MIHOMO_FIND_PROCESS_MODE" in off|strict|always) ;; *) MIHOMO_FIND_PROCESS_MODE=off ;; esac
   case "$MIHOMO_LOG_LEVEL" in silent|error|warning|info|debug) ;; *) MIHOMO_LOG_LEVEL=warning ;; esac
+  case "$MIHOMO_MODE" in source|rule|global|direct) ;; *) MIHOMO_MODE=source ;; esac
   case "$MIHOMO_IPV6:$MIHOMO_STORE_SELECTED:$MIHOMO_STORE_FAKE_IP" in [01]:[01]:[01]) ;; *) MIHOMO_IPV6=0 MIHOMO_STORE_SELECTED=1 MIHOMO_STORE_FAKE_IP=0 ;; esac
   case "$MIHOMO_SNIFFER_OVERRIDE:$MIHOMO_SNIFFER_ENABLE:$MIHOMO_SNIFFER_FORCE_DNS_MAPPING:$MIHOMO_SNIFFER_PARSE_PURE_IP:$MIHOMO_SNIFFER_OVERRIDE_DESTINATION:$MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION" in
     [01]:[01]:[01]:[01]:[01]:[01]) ;;
@@ -567,6 +569,7 @@ load_profile() {
   LOCAL_OVERRIDE_ENABLED=missing
   LOCAL_FIND_PROCESS_MODE=inherit LOCAL_LOG_LEVEL=inherit LOCAL_IPV6=inherit
   LOCAL_STORE_SELECTED=inherit LOCAL_STORE_FAKE_IP=inherit LOCAL_SNIFFER_MODE=inherit
+  LOCAL_MODE=inherit
   SUB_USE_PROVIDER_TITLE=1 SUB_USE_PROVIDER_INTERVAL=1
   SUB_REFRESH_SECONDS=3600 SUB_TIMEOUT_SECONDS=30 SUB_INSECURE_TLS=0
   SUB_AGE_KEY_B64=
@@ -577,7 +580,7 @@ load_profile() {
     key=${line%%=*}
     value=${line#*=}
     case "$key" in
-      SUB_URL_B64|SUB_HEADERS_B64|LOCAL_OVERRIDE_ENABLED|LOCAL_OVERRIDE_B64|LOCAL_FIND_PROCESS_MODE|LOCAL_LOG_LEVEL|LOCAL_IPV6|LOCAL_STORE_SELECTED|LOCAL_STORE_FAKE_IP|LOCAL_SNIFFER_MODE|SUB_USE_PROVIDER_TITLE|SUB_USE_PROVIDER_INTERVAL|SUB_REFRESH_SECONDS|SUB_TIMEOUT_SECONDS|SUB_INSECURE_TLS|SUB_AGE_KEY_B64)
+      SUB_URL_B64|SUB_HEADERS_B64|LOCAL_OVERRIDE_ENABLED|LOCAL_OVERRIDE_B64|LOCAL_MODE|LOCAL_FIND_PROCESS_MODE|LOCAL_LOG_LEVEL|LOCAL_IPV6|LOCAL_STORE_SELECTED|LOCAL_STORE_FAKE_IP|LOCAL_SNIFFER_MODE|SUB_USE_PROVIDER_TITLE|SUB_USE_PROVIDER_INTERVAL|SUB_REFRESH_SECONDS|SUB_TIMEOUT_SECONDS|SUB_INSECURE_TLS|SUB_AGE_KEY_B64)
         export "$key=$value"
         ;;
     esac
@@ -1301,7 +1304,9 @@ write_managed_overlay() {
   effective_store_selected=$MIHOMO_STORE_SELECTED
   effective_store_fake_ip=$MIHOMO_STORE_FAKE_IP
   effective_sniffer_mode=inherit
+  effective_mode=$MIHOMO_MODE
   if [ "$LOCAL_OVERRIDE_ENABLED" = 1 ]; then
+    [ "$LOCAL_MODE" = inherit ] || effective_mode=$LOCAL_MODE
     [ "$LOCAL_FIND_PROCESS_MODE" = inherit ] || effective_find_process_mode=$LOCAL_FIND_PROCESS_MODE
     [ "$LOCAL_LOG_LEVEL" = inherit ] || effective_log_level=$LOCAL_LOG_LEVEL
     [ "$LOCAL_IPV6" = inherit ] || effective_ipv6=$LOCAL_IPV6
@@ -1309,6 +1314,11 @@ write_managed_overlay() {
     [ "$LOCAL_STORE_FAKE_IP" = inherit ] || effective_store_fake_ip=$LOCAL_STORE_FAKE_IP
     [ "$LOCAL_SNIFFER_MODE" = inherit ] || effective_sniffer_mode=$LOCAL_SNIFFER_MODE
   fi
+  # mode со значением source означает "оставить как в подписке", поэтому
+  # ключ в оверлей просто не попадает.
+  case "$effective_mode" in
+    rule|global|direct) printf 'mode: %s\n' "$effective_mode" ;;
+  esac
   cat <<EOF
 find-process-mode: $effective_find_process_mode
 log-level: $effective_log_level
@@ -1427,10 +1437,15 @@ prepare_external_ui() {
 
 replace_top_level_block() {
   rtlb_input="$1" rtlb_output="$2" rtlb_key="$3" rtlb_replacement="$4"
+  # Комментарии и пустые строки, идущие сразу за удаляемым блоком, обычно
+  # относятся к следующему ключу, поэтому они придерживаются в буфере и
+  # возвращаются, если дальше действительно начинается top-level ключ.
   awk -v key="$rtlb_key" '
     function is_top(line) { return line ~ /^[^[:space:]#][^:]*:/ }
-    $0 ~ "^" key ":[[:space:]]*" { skip=1; next }
-    skip && is_top($0) { skip=0 }
+    $0 ~ "^" key ":[[:space:]]*" { skip=1; held=0; next }
+    skip && /^[[:space:]]*(#|$)/ { held++; hold[held]=$0; next }
+    skip && is_top($0) { for (i = 1; i <= held; i++) print hold[i]; held=0; skip=0 }
+    skip { held=0; next }
     !skip { print }
   ' "$rtlb_input" > "$rtlb_output"
   if [ -s "$rtlb_replacement" ]; then
@@ -1482,6 +1497,7 @@ build_final_config() {
   controller_overlay="$build_prefix.controller.yaml"
   managed_overlay="$build_prefix.managed.yaml"
   local_override="$build_prefix.local-override.yaml"
+  global_override="$build_prefix.global-override.yaml"
   local_config="$build_prefix.local.yaml"
   managed_config="$build_prefix.managed-config.yaml"
   listeners_config="$build_prefix.listeners-config.yaml"
@@ -1495,6 +1511,8 @@ build_final_config() {
   if [ "$LOCAL_OVERRIDE_ENABLED" = 1 ]; then
     b64_decode_file "$LOCAL_OVERRIDE_B64" > "$local_override"
   fi
+  : > "$global_override"
+  b64_decode_file "$GLOBAL_OVERRIDE_B64" > "$global_override"
   if ! write_controller_overlay > "$controller_overlay"; then
     BUILD_ERROR="Mihomo controller settings are invalid"
     printf '%s\n' "$BUILD_ERROR" > "$ERROR_FILE"
@@ -1503,7 +1521,11 @@ build_final_config() {
     return 1
   fi
   write_managed_overlay > "$managed_overlay"
-  apply_top_level_override "$SOURCE" "$local_config" "$local_override"
+  # Глобальный оверрайд накладывается первым, локальный поверх него: у
+  # профиля должна быть возможность отменить общее правило.
+  global_config="$build_prefix.global.yaml"
+  apply_top_level_override "$SOURCE" "$global_config" "$global_override"
+  apply_top_level_override "$global_config" "$local_config" "$local_override"
   apply_top_level_override "$local_config" "$managed_config" "$managed_overlay"
   if ! write_listeners_overlay "$managed_config" > "$overlay"; then
     BUILD_ERROR="Listener settings are invalid"

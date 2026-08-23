@@ -209,6 +209,7 @@ profile_detail_json() (
   printf '"local_store_selected":"%s",' "$P_LOCAL_STORE_SELECTED"
   printf '"local_store_fake_ip":"%s",' "$P_LOCAL_STORE_FAKE_IP"
   printf '"local_sniffer_mode":"%s",' "$P_LOCAL_SNIFFER_MODE"
+  printf '"local_mode":"%s",' "$P_LOCAL_MODE"
   printf '"use_provider_title":%s,' "$(bool_or "$P_SUB_USE_PROVIDER_TITLE" 1)"
   printf '"use_provider_interval":%s,' "$(bool_or "$P_SUB_USE_PROVIDER_INTERVAL" 1)"
   printf '"refresh_seconds":%s,' "$(number_or "$P_SUB_REFRESH_SECONDS" 3600)"
@@ -241,6 +242,8 @@ profile_detail_json() (
 # Пишется из уже перечитанных под блокировкой ST_*.
 emit_state_tail() {
   printf 'MIHOMO_SNIFFER_QUIC_PORTS_B64=%s\n' "$ST_MIHOMO_SNIFFER_QUIC_PORTS_B64"
+  printf 'MIHOMO_MODE=%s\n' "$ST_MIHOMO_MODE"
+  printf 'GLOBAL_OVERRIDE_B64=%s\n' "$ST_GLOBAL_OVERRIDE_B64"
   printf 'MIHOMO_SNIFFER_TLS_PORTS_B64=%s\n' "$ST_MIHOMO_SNIFFER_TLS_PORTS_B64"
   printf 'MIHOMO_SNIFFER_HTTP_PORTS_B64=%s\n' "$ST_MIHOMO_SNIFFER_HTTP_PORTS_B64"
   printf 'MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION=%s\n' "$ST_MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION"
@@ -320,6 +323,8 @@ write_container_settings() {
     printf 'TPROXY_PORT=%s\n' "$tproxy_port"
     printf 'MIHOMO_FIND_PROCESS_MODE=%s\n' "$mihomo_find_process_mode"
     printf 'MIHOMO_LOG_LEVEL=%s\n' "$mihomo_log_level"
+    printf 'MIHOMO_MODE=%s\n' "$mihomo_mode"
+    printf 'GLOBAL_OVERRIDE_B64=%s\n' "$(b64 "$global_override")"
     printf 'MIHOMO_IPV6=%s\n' "$mihomo_ipv6"
     printf 'MIHOMO_STORE_SELECTED=%s\n' "$mihomo_store_selected"
     printf 'MIHOMO_STORE_FAKE_IP=%s\n' "$mihomo_store_fake_ip"
@@ -385,6 +390,8 @@ if [ "${REQUEST_METHOD:-GET}" = GET ]; then
   printf '"default_user_agent_b64":"%s",' "$(b64 "$(default_mihomo_user_agent)")"
   printf '"mihomo_find_process_mode":"%s",' "$ST_MIHOMO_FIND_PROCESS_MODE"
   printf '"mihomo_log_level":"%s",' "$ST_MIHOMO_LOG_LEVEL"
+  printf '"mihomo_mode":"%s",' "$ST_MIHOMO_MODE"
+  printf '"global_override_b64":"%s",' "$ST_GLOBAL_OVERRIDE_B64"
   printf '"mihomo_ipv6":%s,' "$ST_MIHOMO_IPV6"
   printf '"mihomo_store_selected":%s,' "$ST_MIHOMO_STORE_SELECTED"
   printf '"mihomo_store_fake_ip":%s,' "$ST_MIHOMO_STORE_FAKE_IP"
@@ -507,6 +514,7 @@ case "$action" in
       printf 'LOCAL_STORE_SELECTED=inherit\n'
       printf 'LOCAL_STORE_FAKE_IP=inherit\n'
       printf 'LOCAL_SNIFFER_MODE=inherit\n'
+      printf 'LOCAL_MODE=inherit\n'
       printf 'SUB_USE_PROVIDER_TITLE=1\n'
       printf 'SUB_USE_PROVIDER_INTERVAL=1\n'
       printf 'SUB_REFRESH_SECONDS=3600\n'
@@ -546,6 +554,8 @@ case "$action" in
     ui_secret=$(form_value external_ui_secret)
     mihomo_find_process_mode=$(form_value mihomo_find_process_mode)
     mihomo_log_level=$(form_value mihomo_log_level)
+    mihomo_mode=$(form_value mihomo_mode)
+    global_override=$(form_value global_override)
     mihomo_ipv6=$(form_value mihomo_ipv6)
     mihomo_store_selected=$(form_value mihomo_store_selected)
     mihomo_store_fake_ip=$(form_value mihomo_store_fake_ip)
@@ -598,6 +608,13 @@ case "$action" in
     [ "${#ui_secret}" -le 512 ] || deny 'Mihomo panel password is too long'
     case "$mihomo_find_process_mode" in off|strict|always) ;; *) deny 'invalid find-process-mode' ;; esac
     case "$mihomo_log_level" in silent|error|warning|info|debug) ;; *) deny 'invalid log-level' ;; esac
+    case "$mihomo_mode" in source|rule|global|direct) ;; *) deny 'invalid mode' ;; esac
+    global_override=$(printf '%s' "$global_override" | tr -d '\r')
+    [ "${#global_override}" -le 32768 ] || deny 'Глобальный оверрайд слишком большой (максимум 32 КиБ)'
+    case "$(override_first_problem "$global_override")" in
+      list) deny 'Глобальный оверрайд: список на верхнем уровне. Элементы списка должны быть с отступом под своим ключом' ;;
+      tab) deny 'Глобальный оверрайд: табы в отступах, YAML их не допускает' ;;
+    esac
     case "$mihomo_ipv6:$mihomo_store_selected:$mihomo_store_fake_ip" in [01]:[01]:[01]) ;; *) deny 'invalid Mihomo switches' ;; esac
     case "$mihomo_sniffer_override:$mihomo_sniffer_enable:$mihomo_sniffer_force_dns_mapping:$mihomo_sniffer_parse_pure_ip:$mihomo_sniffer_override_destination:$mihomo_sniffer_http_override_destination" in
       [01]:[01]:[01]:[01]:[01]:[01]) ;;
@@ -635,6 +652,8 @@ case "$action" in
     b64_text_matches "$ST_EXTERNAL_UI_SECRET_B64" "$ui_secret" || runtime_settings_changed=true
     [ "$ST_MIHOMO_FIND_PROCESS_MODE" = "$mihomo_find_process_mode" ] || runtime_settings_changed=true
     [ "$ST_MIHOMO_LOG_LEVEL" = "$mihomo_log_level" ] || runtime_settings_changed=true
+    [ "$ST_MIHOMO_MODE" = "$mihomo_mode" ] || runtime_settings_changed=true
+    b64_text_matches "$ST_GLOBAL_OVERRIDE_B64" "$global_override" || runtime_settings_changed=true
     [ "$ST_MIHOMO_IPV6" = "$mihomo_ipv6" ] || runtime_settings_changed=true
     [ "$ST_MIHOMO_STORE_SELECTED" = "$mihomo_store_selected" ] || runtime_settings_changed=true
     [ "$ST_MIHOMO_STORE_FAKE_IP" = "$mihomo_store_fake_ip" ] || runtime_settings_changed=true
@@ -681,7 +700,7 @@ target_path=$(profile_file "$target_id") || deny 'invalid profile id'
 [ -f "$target_path" ] || deny 'profile not found'
 profile_load "$target_path"
 old_fetch_signature="$P_SUB_URL_B64|$P_SUB_HEADERS_B64|$P_SUB_TIMEOUT_SECONDS|$P_SUB_INSECURE_TLS|$P_SUB_AGE_KEY_B64"
-old_build_signature="$P_LOCAL_OVERRIDE_ENABLED|$P_LOCAL_OVERRIDE_B64|$P_LOCAL_FIND_PROCESS_MODE|$P_LOCAL_LOG_LEVEL|$P_LOCAL_IPV6|$P_LOCAL_STORE_SELECTED|$P_LOCAL_STORE_FAKE_IP|$P_LOCAL_SNIFFER_MODE"
+old_build_signature="$P_LOCAL_OVERRIDE_ENABLED|$P_LOCAL_OVERRIDE_B64|$P_LOCAL_MODE|$P_LOCAL_FIND_PROCESS_MODE|$P_LOCAL_LOG_LEVEL|$P_LOCAL_IPV6|$P_LOCAL_STORE_SELECTED|$P_LOCAL_STORE_FAKE_IP|$P_LOCAL_SNIFFER_MODE"
 url=$(form_value url)
 name=$(form_value name)
 headers=$(form_value headers)
@@ -693,6 +712,7 @@ local_ipv6=$(form_value local_ipv6)
 local_store_selected=$(form_value local_store_selected)
 local_store_fake_ip=$(form_value local_store_fake_ip)
 local_sniffer_mode=$(form_value local_sniffer_mode)
+local_mode=$(form_value local_mode)
 use_provider_title=$(form_value use_provider_title)
 use_provider_interval=$(form_value use_provider_interval)
 refresh_minutes=$(form_value refresh_minutes)
@@ -723,11 +743,17 @@ case "$local_ipv6" in inherit|0|1) ;; *) deny 'invalid local IPv6 mode' ;; esac
 case "$local_store_selected" in inherit|0|1) ;; *) deny 'invalid local store-selected mode' ;; esac
 case "$local_store_fake_ip" in inherit|0|1) ;; *) deny 'invalid local store-fake-ip mode' ;; esac
 case "$local_sniffer_mode" in inherit|source|disabled) ;; *) deny 'invalid local sniffer mode' ;; esac
+case "$local_mode" in inherit|source|rule|global|direct) ;; *) deny 'invalid local mode' ;; esac
 clean_headers=$(printf '%s' "$headers" | tr -d '\r')
 [ "$clean_headers" = "$headers" ] || deny 'Headers must not contain CR'
 [ "${#headers}" -le 16384 ] || deny 'Headers are too large'
 valid_header_block "$headers" || deny 'Headers contain an invalid or duplicate name'
 local_override=$(printf '%s' "$local_override" | tr -d '\r')
+[ "${#local_override}" -le 32768 ] || deny 'Оверрайд слишком большой (максимум 32 КиБ)'
+case "$(override_first_problem "$local_override")" in
+  list) deny 'Оверрайд: список на верхнем уровне. Элементы списка должны быть с отступом под своим ключом' ;;
+  tab) deny 'Оверрайд: табы в отступах, YAML их не допускает' ;;
+esac
 [ -n "$name" ] || name="$target_id"
 clean_name=$(printf '%s' "$name" | tr -d '\r\n')
 [ "$clean_name" = "$name" ] || deny 'Profile name must be one line'
@@ -748,6 +774,7 @@ umask 077
   printf 'LOCAL_STORE_SELECTED=%s\n' "$local_store_selected"
   printf 'LOCAL_STORE_FAKE_IP=%s\n' "$local_store_fake_ip"
   printf 'LOCAL_SNIFFER_MODE=%s\n' "$local_sniffer_mode"
+  printf 'LOCAL_MODE=%s\n' "$local_mode"
   printf 'SUB_USE_PROVIDER_TITLE=%s\n' "$use_provider_title"
   printf 'SUB_USE_PROVIDER_INTERVAL=%s\n' "$use_provider_interval"
   printf 'SUB_REFRESH_SECONDS=%s\n' "$refresh"
@@ -757,7 +784,7 @@ umask 077
 } > "$tmp"
 persist_file_if_changed "$tmp" "$target_path" || deny 'could not save profile'
 new_fetch_signature="$(b64 "$url")|$(b64 "$headers")|$timeout|$insecure|$(b64 "$age_key")"
-new_build_signature="$local_override_enabled|$(b64 "$local_override")|$local_find_process_mode|$local_log_level|$local_ipv6|$local_store_selected|$local_store_fake_ip|$local_sniffer_mode"
+new_build_signature="$local_override_enabled|$(b64 "$local_override")|$local_mode|$local_find_process_mode|$local_log_level|$local_ipv6|$local_store_selected|$local_store_fake_ip|$local_sniffer_mode"
 queued=false
 queued_action=
 if [ -n "$url" ] && { [ "$old_fetch_signature" != "$new_fetch_signature" ] || [ ! -s "$PROFILES_DIR/$target_id.source.yaml" ]; }; then
