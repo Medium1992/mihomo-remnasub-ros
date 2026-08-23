@@ -1,10 +1,16 @@
 #!/bin/sh
 . /www/cgi-bin/_remna.sh
 
+profile_load "$PROFILE"
+meta_load "$META"
+UI_STATE= UI_UPDATED_EPOCH= UI_MESSAGE_B64= UI_SOURCE_B64=
+conf_load UI_ "$UI_STATUS"
+: "${UI_STATE:=idle}" "${UI_UPDATED_EPOCH:=0}"
+
 json_headers
 source_present=false; [ -s "$SOURCE" ] && source_present=true
 final_present=false; [ -s "$FINAL" ] && final_present=true
-configured=false; [ -n "$(state_get SUB_URL_B64)" ] && configured=true
+configured=false; [ -n "$P_SUB_URL_B64" ] && configured=true
 nft_available=false; grep -q '^nf_tables ' /proc/modules 2>/dev/null && nft_available=true
 if [ "$nft_available" = true ]; then firewall_backend=nftables; else firewall_backend=iptables-legacy; fi
 
@@ -15,17 +21,14 @@ active_network_cidr=$(ip -4 -o addr show dev "$active_network_interface" scope g
 external_ui_present=false; [ -s "$UI_DIR/index.html" ] && external_ui_present=true
 external_ui_mtime=$(stat -c '%Y' "$UI_DIR/index.html" 2>/dev/null || printf '0')
 valid_number "$external_ui_mtime" || external_ui_mtime=0
-ui_state=$(state_file_get "$UI_STATUS" STATE idle)
-ui_message_b64=$(state_file_get "$UI_STATUS" MESSAGE_B64)
-ui_updated_at=$(state_file_get "$UI_STATUS" UPDATED_EPOCH 0)
-valid_number "$ui_updated_at" || ui_updated_at=0
+valid_number "$UI_UPDATED_EPOCH" || UI_UPDATED_EPOCH=0
+case "$UI_STATE" in idle|downloading|ready|error) ;; *) UI_STATE=idle ;; esac
 
-active_profile_id=$(state_file_get "$STATE" ACTIVE_PROFILE_ID "$ACTIVE_PROFILE_ID")
-run_enabled=$(state_file_get "$STATE" RUN_ENABLED 0)
+active_profile_id="${ST_ACTIVE_PROFILE_ID:-$ACTIVE_PROFILE_ID}"
 process_running=false
 pidof mihomo >/dev/null 2>&1 && process_running=true
 mihomo_running=false
-if [ "$process_running" = true ] && [ "$configured" = true ] && [ "$final_present" = true ] && [ "$run_enabled" = 1 ]; then
+if [ "$process_running" = true ] && [ "$configured" = true ] && [ "$final_present" = true ] && [ "$ST_RUN_ENABLED" = 1 ]; then
   mihomo_running=true
 fi
 
@@ -33,20 +36,20 @@ profile_count=0
 for profile in "$PROFILES_DIR"/p-*.conf; do [ -f "$profile" ] && profile_count=$((profile_count + 1)); done
 error_b64=$(b64 "$(cat "$ERROR_FILE" 2>/dev/null || true)")
 meta_b64=$(b64 "$(cat "$META" 2>/dev/null || true)")
-configuration_valid=$(state_file_get "$META" configuration_valid unknown)
 final_mtime=$(stat -c '%Y' "$FINAL" 2>/dev/null || printf '0')
 valid_number "$final_mtime" || final_mtime=0
 final_version=$(cat "$STATUS_DIR/$active_profile_id.version" 2>/dev/null || printf '0')
 valid_number "$final_version" || final_version=0
 
-refresh_state=$(profile_status_get "$active_profile_id" STATE idle)
-refresh_stage=$(profile_status_get "$active_profile_id" STAGE idle)
+status_load "$active_profile_id"
+refresh_state="$S_STATE"
+refresh_stage="$S_STAGE"
 [ -f "$JOBS_DIR/$active_profile_id.request" ] && refresh_state=queued refresh_stage=queued
 using_previous_config=false
-if [ "$final_present" = true ] && { [ "$configuration_valid" = 0 ] || [ "$refresh_state" = error ]; }; then
+if [ "$final_present" = true ] && { [ "$M_configuration_valid" = 0 ] || [ "$refresh_state" = error ]; }; then
   using_previous_config=true
 fi
 event_log_b64=$(b64 "$(tail -n 200 "$EVENT_LOG" 2>/dev/null || true)")
 
 printf '{"ok":true,"configured":%s,"source_present":%s,"final_present":%s,"final_mtime":%s,"final_version":%s,"configuration_valid":"%s","using_previous_config":%s,"mihomo_running":%s,"mihomo_process_running":%s,"run_enabled":%s,"nft_available":%s,"firewall_backend":"%s","active_network_interface_b64":"%s","active_network_cidr_b64":"%s","external_ui_present":%s,"external_ui_mtime":%s,"external_ui_state":"%s","external_ui_message_b64":"%s","external_ui_updated_at":%s,"active_profile_id":"%s","profile_count":%s,"refresh_state":"%s","refresh_stage":"%s","error_b64":"%s","meta_b64":"%s","event_log_b64":"%s"}\n' \
-  "$configured" "$source_present" "$final_present" "$final_mtime" "$final_version" "$configuration_valid" "$using_previous_config" "$mihomo_running" "$process_running" "$run_enabled" "$nft_available" "$firewall_backend" "$(b64 "$active_network_interface")" "$(b64 "$active_network_cidr")" "$external_ui_present" "$external_ui_mtime" "$ui_state" "$ui_message_b64" "$ui_updated_at" "$active_profile_id" "$profile_count" "$refresh_state" "$refresh_stage" "$error_b64" "$meta_b64" "$event_log_b64"
+  "$configured" "$source_present" "$final_present" "$final_mtime" "$final_version" "$M_configuration_valid" "$using_previous_config" "$mihomo_running" "$process_running" "$ST_RUN_ENABLED" "$nft_available" "$firewall_backend" "$(b64 "$active_network_interface")" "$(b64 "$active_network_cidr")" "$external_ui_present" "$external_ui_mtime" "$UI_STATE" "$UI_MESSAGE_B64" "$UI_UPDATED_EPOCH" "$active_profile_id" "$profile_count" "$refresh_state" "$refresh_stage" "$error_b64" "$meta_b64" "$event_log_b64"

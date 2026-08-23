@@ -1,19 +1,19 @@
 #!/bin/sh
-# POST raw password body -> md5crypt hash ($1$...) for BASIC_AUTH_HASH.
-# Returns: { "ok": bool, "hash": "..." }
-. /www/cgi-bin/_lib.sh
-. /www/cgi-bin/_guard.sh
-guard_json
+# POST с паролем в теле -> md5crypt-хеш ($1$...) для BASIC_AUTH_HASH.
+# Ответ: { "ok": bool, "hash": "..." }
+. /www/cgi-bin/_remna.sh
+require_post
 
-PWD_IN="$(read_body)"
-if [ -z "$PWD_IN" ]; then
-  send_json "400 Bad Request"; printf '{"ok":false,"error":"Пароль не задан"}'; exit 0
-fi
+valid_number "${CONTENT_LENGTH:-0}" || deny 'invalid request length'
+[ "${CONTENT_LENGTH:-0}" -le 512 ] || deny 'Пароль слишком длинный'
+password=$(head -c "${CONTENT_LENGTH:-0}")
+[ -n "$password" ] || deny 'Пароль не задан'
 
-HASH="$(printf '%s' "$PWD_IN" | openssl passwd -1 -stdin 2>/dev/null)"
-if [ -z "$HASH" ]; then
-  send_json "500 Internal Server Error"; printf '{"ok":false,"error":"OpenSSL не смог создать хеш"}'; exit 0
-fi
+hash=$(printf '%s' "$password" | openssl passwd -1 -stdin 2>/dev/null)
+case "$hash" in
+  '$1$'*) ;;
+  *) deny 'OpenSSL не смог создать хеш' ;;
+esac
 
-send_json "200 OK"
-printf '{"ok":true,"hash":"%s"}' "$(printf '%s' "$HASH" | json_escape)"
+json_headers
+printf '{"ok":true,"hash":"%s"}\n' "$hash"

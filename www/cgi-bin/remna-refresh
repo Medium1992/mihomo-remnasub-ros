@@ -6,7 +6,8 @@ profile_id=$(form_value profile_id)
 [ -n "$profile_id" ] || profile_id="$ACTIVE_PROFILE_ID"
 profile_path=$(profile_file "$profile_id") || deny 'invalid profile id'
 [ -f "$profile_path" ] || deny 'profile not found'
-[ -n "$(state_file_get "$profile_path" SUB_URL_B64)" ] || deny 'Subscription URL is not configured'
+profile_load "$profile_path"
+[ -n "$P_SUB_URL_B64" ] || deny 'Subscription URL is not configured'
 queue_profile_job "$profile_id" fetch "manual refresh" || deny 'could not queue subscription refresh'
 json_headers
 printf '{"ok":true,"queued":true,"profile_id":"%s","action":"fetch"}\n' "$profile_id"

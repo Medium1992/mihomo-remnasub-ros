@@ -204,6 +204,11 @@ Mihomo itself may create `cache.db` and geodata files under `/etc/mihomo` when r
 ## 🛡 Security
 
 - Change the default `admin` password immediately. Only its hash is stored in ENV.
+- **Always set a Mihomo dashboard password** under **Settings -> Mihomo panel**. Port `9090` is the
+  core's own RESTful API and listens on every interface so the dashboard can be opened from a
+  computer on the same network. While the secret is empty, anyone on that network can switch
+  proxies, read the configuration with every subscription credential in it, and replace it. For the
+  same reason, never forward `9090` to the internet.
 - The WebUI uses plain HTTP; never expose container port `80` directly to the internet. Use LAN or VPN access.
 - Mutating subscription endpoints require same-origin POST and enforce request-size limits.
 - Content Security Policy blocks external scripts, inline code, framing, and unrelated browser network requests.
