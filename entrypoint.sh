@@ -213,6 +213,11 @@ EOF
   chmod 600 "$profile_create_path" 2>/dev/null || true
 }
 
+# Обе перезаписи state.conf ниже вызываются только из initialize_storage, то
+# есть до старта httpd, поэтому с CGI они не конкурируют и блокировка из
+# _remna.sh здесь не нужна. Фоновые циклы состояние только читают, а запись
+# всегда атомарна (tmp + mv), так что читатель видит либо старый файл целиком,
+# либо новый.
 replace_state_active_profile() {
   replacement_id="$1"
   [ -f "$STATE" ] || return 0
@@ -411,11 +416,13 @@ build_webroot() {
   mount -o remount,exec /dev/shm 2>/dev/null || true
   rm -rf "$WEBROOT"
   mkdir -p "$WEBROOT/cgi-bin" "$WEBROOT/assets"
-  for file in _remna.sh remna-profile remna-status remna-config remna-refresh gen-hash; do
+  # В webroot попадают только сами эндпоинты. _remna.sh сорсится по
+  # абсолютному пути из /www, поэтому под cgi-bin ему делать нечего: httpd
+  # пытается исполнить всё, что там лежит.
+  for file in remna-profile remna-status remna-config remna-refresh gen-hash; do
     cp "$WEB_ROOT/cgi-bin/$file" "$WEBROOT/cgi-bin/$file"
+    chmod 0755 "$WEBROOT/cgi-bin/$file" 2>/dev/null || true
   done
-  chmod 0644 "$WEBROOT/cgi-bin/_remna.sh" 2>/dev/null || true
-  chmod 0755 "$WEBROOT/cgi-bin/remna-profile" "$WEBROOT/cgi-bin/remna-status" "$WEBROOT/cgi-bin/remna-config" "$WEBROOT/cgi-bin/remna-refresh" "$WEBROOT/cgi-bin/gen-hash" 2>/dev/null || true
   cp "$WEB_ROOT/index.html" "$WEBROOT/index.html"
   cp "$WEB_ROOT/assets/remna.css" "$WEBROOT/assets/remna.css"
   cp "$WEB_ROOT/assets/remna.js" "$WEBROOT/assets/remna.js"
