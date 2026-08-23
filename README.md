@@ -127,6 +127,32 @@ These five keys are always sent, but their values are editable. Any custom heade
 
 The final HTTP status line, status code, response size, and fetch time are stored as well.
 
+## 🔒 Encrypted subscriptions
+
+Remnawave can serve the subscription encrypted, configured in a Subscription Response Rule through `responseModifications.encryption`:
+
+```json
+"responseType": "MIHOMO",
+"responseModifications": {
+  "encryption": { "key": "age1...", "method": "age1" }
+}
+```
+
+The body arrives as [age](https://age-encryption.org) in ASCII armor, starting with `-----BEGIN AGE ENCRYPTED FILE-----`. Both methods are supported: `age1` (X25519) and `age1pq1` (the ML-KEM-768 + X25519 post-quantum hybrid).
+
+The container decrypts the response right after download, before overrides are applied and before `mihomo -t` validates it, so everything downstream behaves exactly as with plain YAML -- including the **Downloaded YAML** viewer in the web UI. Decryption is done by the core itself: mihomo ships age.
+
+**Setup:**
+
+1. Open the subscription card and find the **Response encryption** block.
+2. Press **Generate** with the method you need. The pair is created inside the container: the private key goes straight into the field and never leaves, the public key is shown for copying.
+3. Paste the public key into `encryption.key` of the panel's response rule and select the same method there.
+4. Save the subscription -- it will be refetched, now encrypted.
+
+If the pair was already generated in the panel (`docker exec -it remnawave cli` -> *Generate keypairs*), just paste its private half (`AGE-SECRET-KEY-1...` or `AGE-SECRET-KEY-PQ-1...`) into the key field.
+
+An empty field means the subscription is treated as unencrypted. If the server sends an encrypted body anyway and no key is set, the card shows a clear error instead of an opaque YAML parse failure.
+
 ## 🧩 YAML Override Rules
 
 The subscription remains a complete configuration. Only managed sections are changed:

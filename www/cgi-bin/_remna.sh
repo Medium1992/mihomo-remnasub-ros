@@ -15,6 +15,12 @@ UI_REQUEST="$RUNTIME_DIR/ui.request"
 STATE_LOCK="$RUNTIME_DIR/state.lock"
 UA_CACHE="$RUNTIME_DIR/mihomo.ua"
 
+# httpd отдаёт CGI урезанный PATH, в котором нет /usr/local/bin, поэтому путь
+# к ядру задаём явно: иначе mihomo -v молча не запускался и вебка показывала
+# запасную версию в User-Agent, а сохранение настроек её же и закрепляло.
+MIHOMO_BIN=/usr/local/bin/mihomo
+[ -x "$MIHOMO_BIN" ] || MIHOMO_BIN=$(command -v mihomo 2>/dev/null || printf 'mihomo')
+
 mkdir -p "$JOBS_DIR" "$STATUS_DIR" "$ERRORS_DIR"
 
 # ── Блокировка state.conf ────────────────────────────────────
@@ -115,7 +121,7 @@ default_mihomo_user_agent() {
     cat "$UA_CACHE"
     return 0
   fi
-  version=$(mihomo -v 2>/dev/null | awk 'NR == 1 && $1 == "Mihomo" && $2 == "Meta" { print $3; exit }')
+  version=$("$MIHOMO_BIN" -v 2>/dev/null | awk 'NR == 1 && $1 == "Mihomo" && $2 == "Meta" { print $3; exit }')
   [ -n "$version" ] || version=1.19.29
   if printf 'clash.meta/%s' "$version" > "$UA_CACHE.tmp.$$" 2>/dev/null; then
     mv "$UA_CACHE.tmp.$$" "$UA_CACHE" 2>/dev/null || rm -f "$UA_CACHE.tmp.$$"
@@ -158,6 +164,20 @@ conf_load() {
 }
 
 valid_number() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+
+# Приватный ключ age. У обычного получателя префикс AGE-SECRET-KEY-1, у
+# постквантового (age1pq1) — AGE-SECRET-KEY-PQ-1; тело в обоих случаях
+# Bech32 в верхнем регистре.
+valid_age_key() {
+  case "${1:-}" in
+    'AGE-SECRET-KEY-1'*|'AGE-SECRET-KEY-PQ-1'*) ;;
+    *) return 1 ;;
+  esac
+  case "${1#AGE-SECRET-KEY-}" in
+    ''|*[!A-Z0-9-]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
 
 valid_profile_id() {
   case "${1:-}" in
@@ -229,6 +249,7 @@ profile_load() {
   P_LOCAL_LOG_LEVEL= P_LOCAL_IPV6= P_LOCAL_STORE_SELECTED= P_LOCAL_STORE_FAKE_IP=
   P_LOCAL_SNIFFER_MODE= P_SUB_USE_PROVIDER_TITLE= P_SUB_USE_PROVIDER_INTERVAL=
   P_SUB_REFRESH_SECONDS= P_SUB_TIMEOUT_SECONDS= P_SUB_INSECURE_TLS=
+  P_SUB_AGE_KEY_B64=
   conf_load P_ "$1"
   : "${P_LOCAL_FIND_PROCESS_MODE:=inherit}" "${P_LOCAL_LOG_LEVEL:=inherit}"
   : "${P_LOCAL_IPV6:=inherit}" "${P_LOCAL_STORE_SELECTED:=inherit}"

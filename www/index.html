@@ -262,6 +262,21 @@
           <label class="setting-row switch-row"><span><b>Интервал от сервера</b><small>Использовать profile-update-interval вместо резервного значения выше</small></span><input id="profile-use-provider-interval" type="checkbox"><i></i></label>
           <label class="setting-row switch-row"><span><b>Недоверенный TLS</b><small>Только для известного источника</small></span><input id="profile-insecure" type="checkbox"><i></i></label>
         </div>
+        <section class="profile-encryption">
+          <div class="header-editor-intro"><span><b>Шифрование ответа</b><small>Если в правиле ответов Remnawave включён <code>responseModifications.encryption</code>, вставьте приватный ключ. Пусто — подписка не шифруется</small></span></div>
+          <label class="text-setting compact"><span><b>Приватный ключ age</b><small>Формат <code>AGE-SECRET-KEY-1…</code> или <code>AGE-SECRET-KEY-PQ-1…</code></small></span><span class="password-field"><input id="profile-age-key" type="password" maxlength="512" autocomplete="off" spellcheck="false" placeholder="AGE-SECRET-KEY-1..."><button class="icon-button" type="button" data-toggle-password="profile-age-key" title="Показать ключ"><svg><use href="#i-eye"/></svg></button></span></label>
+          <div class="age-keygen-row">
+            <span><b>Нет пары ключей?</b><small>Сгенерируем в контейнере: приватный останется здесь, публичный вставьте в правило панели</small></span>
+            <span class="age-keygen-actions">
+              <select id="profile-age-method" aria-label="Метод шифрования"><option value="age1">age1</option><option value="age1pq1">age1pq1</option></select>
+              <button class="secondary-button" type="button" id="profile-age-generate"><svg><use href="#i-lock"/></svg>Сгенерировать</button>
+            </span>
+          </div>
+          <div class="age-public-result hidden" id="profile-age-public-result">
+            <span><b>Публичный ключ (recipient)</b><small>Вставьте его в <code>encryption.key</code> правила ответов панели</small></span>
+            <span class="copy-field"><input id="profile-age-public" type="text" readonly spellcheck="false"><button class="icon-button" type="button" id="copy-profile-age-public" title="Копировать публичный ключ"><svg><use href="#i-copy"/></svg></button></span>
+          </div>
+        </section>
         <section class="profile-provider hidden" id="profile-provider-meta">
           <div class="profile-provider-head"><span><b>Данные подписки</b><small>Стандартные заголовки ответа Remnawave</small></span><strong id="profile-provider-title">Профиль</strong></div>
           <div class="profile-provider-grid">
