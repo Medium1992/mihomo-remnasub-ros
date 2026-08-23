@@ -52,6 +52,38 @@ export function updateLocalOverrideState(openOnEnable = false) {
   if (enabled && openOnEnable) details.open = true;
 }
 
+
+// Публичный ключ показывается только сразу после генерации: он не хранится,
+// потому что нужен один раз — вставить в правило ответов панели.
+function setAgeKey(value) {
+  $("profile-age-key").value = value || "";
+  $("profile-age-key").type = "password";
+  $("profile-age-public").value = "";
+  $("profile-age-public-result").classList.add("hidden");
+  $("profile-age-method").value = String(value || "").startsWith("AGE-SECRET-KEY-PQ-") ? "age1pq1" : "age1";
+}
+
+export async function generateAgeKeypair() {
+  const button = $("profile-age-generate");
+  button.disabled = true;
+  try {
+    const payload = await requestJson("/cgi-bin/remna-age-keygen", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ method: $("profile-age-method").value })
+    });
+    const secret = decode(payload.secret_b64);
+    const publicKey = decode(payload.public_b64);
+    if (!secret || !publicKey) throw new Error("Ядро не вернуло пару ключей");
+    $("profile-age-key").value = secret;
+    $("profile-age-public").value = publicKey;
+    $("profile-age-public-result").classList.remove("hidden");
+    toast("Пара ключей создана · публичный вставьте в правило панели");
+  } finally {
+    button.disabled = false;
+  }
+}
+
 export function createProfile() {
   showPage("subscriptions");
   ui.editorRequestToken += 1;
@@ -67,6 +99,7 @@ export function createProfile() {
   $("profile-use-provider-interval").checked = true;
   $("profile-insecure").checked = false;
   $("profile-provider-meta").classList.add("hidden");
+  setAgeKey("");
   $("profile-local-override-enabled").checked = false;
   renderHeaders("profile-header-rows", "");
   $("profile-local-find-process").value = "inherit";
@@ -93,6 +126,7 @@ function populateEditor(profile) {
   $("profile-use-provider-interval").checked = Boolean(profile.use_provider_interval);
   $("profile-insecure").checked = Boolean(profile.insecure_tls);
   renderProviderMetadata(profile);
+  setAgeKey(decode(profile.age_key_b64));
   $("profile-local-override-enabled").checked = Boolean(profile.local_override_enabled);
   renderHeaders("profile-header-rows", decode(profile.headers_b64));
   $("profile-local-find-process").value = profile.local_find_process_mode || "inherit";
@@ -153,7 +187,8 @@ export async function saveProfile(event) {
     use_provider_interval: $("profile-use-provider-interval").checked ? "1" : "0",
     refresh_minutes: $("profile-refresh").value,
     timeout_seconds: $("profile-timeout").value,
-    insecure_tls: $("profile-insecure").checked ? "1" : "0"
+    insecure_tls: $("profile-insecure").checked ? "1" : "0",
+    age_key: $("profile-age-key").value.trim()
   };
   let created = "";
   if (!fields.profile_id) {

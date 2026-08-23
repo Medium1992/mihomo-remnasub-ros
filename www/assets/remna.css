@@ -607,3 +607,19 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
   .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .accent-row { display: grid; }
 }
+
+/* ── Шифрование подписки ─────────────────────────────────────
+   Публичный ключ постквантового метода — почти 2000 символов, поэтому поле
+   для него скроллится по горизонтали, а не растягивает модалку. */
+.profile-encryption { display: grid; gap: 10px; margin-top: 14px; padding: 13px; border: 1px solid var(--border); border-radius: 12px; background-color: var(--base-100); }
+.age-keygen-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.age-keygen-row > span:first-child { display: grid; gap: 3px; min-width: 0; }
+.age-keygen-row b { color: var(--strong); font-size: 12px; }
+.age-keygen-row small { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.age-keygen-actions { display: flex; align-items: center; gap: 8px; }
+.age-keygen-actions select { min-height: 34px; padding: 0 9px; border: 1px solid var(--border-hover); border-radius: 9px; color: var(--base-content); background-color: var(--base-300); }
+.age-public-result { display: grid; gap: 7px; padding-top: 11px; border-top: 1px solid var(--border); }
+.age-public-result > span:first-child { display: grid; gap: 3px; }
+.age-public-result b { color: var(--strong); font-size: 12px; }
+.age-public-result small { color: var(--muted); font-size: 11px; }
+.age-public-result input { overflow-x: auto; font: 11px/1.5 ui-monospace, Consolas, monospace; text-overflow: clip; white-space: nowrap; }

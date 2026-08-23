@@ -135,6 +135,8 @@ function bootstrap() {
     toast("Таймауты возвращены к значениям RouterOS");
   });
 
+  $("profile-age-generate").addEventListener("click", protectedAction(editor.generateAgeKeypair));
+  $("copy-profile-age-public").addEventListener("click", protectedAction(() => copyViewer("profile-age-public", "Публичный ключ скопирован")));
   $("profile-form").addEventListener("submit", protectedAction(editor.saveProfile));
   $("close-editor").addEventListener("click", editor.closeEditor);
   $("cancel-editor").addEventListener("click", editor.closeEditor);

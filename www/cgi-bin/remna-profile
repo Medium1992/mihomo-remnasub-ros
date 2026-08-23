@@ -215,6 +215,7 @@ profile_detail_json() (
   printf '"effective_refresh_seconds":%s,' "$(effective_refresh)"
   printf '"timeout_seconds":%s,' "$(number_or "$P_SUB_TIMEOUT_SECONDS" 30)"
   printf '"insecure_tls":%s,' "$(bool_or "$P_SUB_INSECURE_TLS" 0)"
+  printf '"age_key_b64":"%s",' "$P_SUB_AGE_KEY_B64"
   printf '"provider_title_b64":"%s",' "$M_provider_title_b64"
   printf '"provider_refresh_seconds":%s,' "$(number_or "$M_provider_refresh_seconds" 0)"
   printf '"subscription_userinfo_b64":"%s",' "$M_subscription_userinfo_b64"
@@ -511,6 +512,7 @@ case "$action" in
       printf 'SUB_REFRESH_SECONDS=3600\n'
       printf 'SUB_TIMEOUT_SECONDS=30\n'
       printf 'SUB_INSECURE_TLS=0\n'
+      printf 'SUB_AGE_KEY_B64=\n'
     } > "$profile_path"
     json_headers
     printf '{"ok":true,"created":"%s"}\n' "$profile_id"
@@ -678,7 +680,7 @@ active_id="${ST_ACTIVE_PROFILE_ID:-$ACTIVE_PROFILE_ID}"
 target_path=$(profile_file "$target_id") || deny 'invalid profile id'
 [ -f "$target_path" ] || deny 'profile not found'
 profile_load "$target_path"
-old_fetch_signature="$P_SUB_URL_B64|$P_SUB_HEADERS_B64|$P_SUB_TIMEOUT_SECONDS|$P_SUB_INSECURE_TLS"
+old_fetch_signature="$P_SUB_URL_B64|$P_SUB_HEADERS_B64|$P_SUB_TIMEOUT_SECONDS|$P_SUB_INSECURE_TLS|$P_SUB_AGE_KEY_B64"
 old_build_signature="$P_LOCAL_OVERRIDE_ENABLED|$P_LOCAL_OVERRIDE_B64|$P_LOCAL_FIND_PROCESS_MODE|$P_LOCAL_LOG_LEVEL|$P_LOCAL_IPV6|$P_LOCAL_STORE_SELECTED|$P_LOCAL_STORE_FAKE_IP|$P_LOCAL_SNIFFER_MODE"
 url=$(form_value url)
 name=$(form_value name)
@@ -697,6 +699,7 @@ refresh_minutes=$(form_value refresh_minutes)
 refresh=$(form_value refresh_seconds)
 timeout=$(form_value timeout_seconds)
 insecure=$(form_value insecure_tls)
+age_key=$(form_value age_key)
 
 case "$url" in ''|http://*|https://*) ;; *) deny 'URL must use http(s)' ;; esac
 clean_url=$(printf '%s' "$url" | tr -d '\r\n')
@@ -710,6 +713,9 @@ else
 fi
 valid_number "$timeout" && [ "$timeout" -ge 3 ] && [ "$timeout" -le 120 ] || deny 'Timeout must be 3..120 seconds'
 case "$insecure" in 0|1) ;; *) insecure=0 ;; esac
+age_key=$(printf '%s' "$age_key" | tr -d '[:space:]')
+[ "${#age_key}" -le 512 ] || deny 'Ключ расшифровки слишком длинный'
+[ -z "$age_key" ] || valid_age_key "$age_key" || deny 'Ключ расшифровки должен начинаться с AGE-SECRET-KEY-1 или AGE-SECRET-KEY-PQ-1'
 case "$local_override_enabled:$use_provider_title:$use_provider_interval" in [01]:[01]:[01]) ;; *) deny 'invalid local override switches' ;; esac
 case "$local_find_process_mode" in inherit|off|strict|always) ;; *) deny 'invalid local find-process-mode' ;; esac
 case "$local_log_level" in inherit|silent|error|warning|info|debug) ;; *) deny 'invalid local log-level' ;; esac
@@ -747,9 +753,10 @@ umask 077
   printf 'SUB_REFRESH_SECONDS=%s\n' "$refresh"
   printf 'SUB_TIMEOUT_SECONDS=%s\n' "$timeout"
   printf 'SUB_INSECURE_TLS=%s\n' "$insecure"
+  printf 'SUB_AGE_KEY_B64=%s\n' "$(b64 "$age_key")"
 } > "$tmp"
 persist_file_if_changed "$tmp" "$target_path" || deny 'could not save profile'
-new_fetch_signature="$(b64 "$url")|$(b64 "$headers")|$timeout|$insecure"
+new_fetch_signature="$(b64 "$url")|$(b64 "$headers")|$timeout|$insecure|$(b64 "$age_key")"
 new_build_signature="$local_override_enabled|$(b64 "$local_override")|$local_find_process_mode|$local_log_level|$local_ipv6|$local_store_selected|$local_store_fake_ip|$local_sniffer_mode"
 queued=false
 queued_action=

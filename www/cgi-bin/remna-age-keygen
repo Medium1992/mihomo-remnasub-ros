@@ -1,0 +1,27 @@
+#!/bin/sh
+# Генерация пары ключей age силами ядра: приватный остаётся в контейнере,
+# публичный пользователь вставляет в правило ответов панели.
+#   POST method=age1|age1pq1  ->  { ok, secret_b64, public_b64 }
+. /www/cgi-bin/_remna.sh
+require_post
+load_form
+
+method=$(form_value method)
+case "$method" in
+  age1) keygen_sub=keygen ;;
+  age1pq1) keygen_sub=keygen-pq ;;
+  *) deny 'Неизвестный метод шифрования' ;;
+esac
+
+keygen_out=$("$MIHOMO_BIN" age "$keygen_sub" 2>/dev/null) || deny 'Ядро не смогло сгенерировать ключи'
+
+# Вывод подкоманды: "# created: ...", "# public key: <recipient>", "<secret>"
+keygen_public=$(printf '%s\n' "$keygen_out" | sed -n 's/^# public key: //p' | head -n 1)
+keygen_secret=$(printf '%s\n' "$keygen_out" | grep -v '^#' | tr -d '[:space:]' | head -n 1)
+
+valid_age_key "$keygen_secret" || deny 'Ядро вернуло ключ в неизвестном формате'
+[ -n "$keygen_public" ] || deny 'Ядро не вернуло публичный ключ'
+
+json_headers
+printf '{"ok":true,"method":"%s","secret_b64":"%s","public_b64":"%s"}\n' \
+  "$method" "$(b64 "$keygen_secret")" "$(b64 "$keygen_public")"
