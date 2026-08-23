@@ -156,6 +156,7 @@
                     <label><span>URL ZIP-архива</span><input id="external-ui-url" type="url" inputmode="url" spellcheck="false"></label>
                   </div>
                 </div>
+                <aside class="settings-callout warning hidden" id="external-ui-secret-warning"><svg><use href="#i-alert"/></svg><div><b>Пароль панели не задан</b><p>Порт <code>9090</code> — это RESTful API самого ядра, он слушает все интерфейсы, чтобы панель открывалась с компьютера в той же сети. Пока пароль пуст, любой в этой сети может без авторизации переключать прокси, читать конфигурацию со всеми учётными данными подписки и подменять её.</p></div></aside>
                 <label class="text-setting compact"><span><b>Пароль панели</b><small>Secret контроллера · изменение автоматически перезапускает Mihomo</small></span><span class="password-field"><input id="external-ui-secret" type="password" maxlength="512" autocomplete="new-password"><button class="icon-button" type="button" id="toggle-external-ui-secret" title="Показать пароль"><svg><use href="#i-eye"/></svg></button></span></label>
                 <div class="setting-row"><span><b>Локальная папка</b><small>При смене источника старые файлы удаляются</small></span><strong id="external-ui-state">/etc/mihomo/ui</strong></div>
               </div>
@@ -305,6 +306,6 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="assets/remna.js"></script>
+  <script type="module" src="assets/js/main.js"></script>
 </body>
 </html>

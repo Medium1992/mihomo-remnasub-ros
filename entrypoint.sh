@@ -425,7 +425,9 @@ build_webroot() {
   done
   cp "$WEB_ROOT/index.html" "$WEBROOT/index.html"
   cp "$WEB_ROOT/assets/remna.css" "$WEBROOT/assets/remna.css"
-  cp "$WEB_ROOT/assets/remna.js" "$WEBROOT/assets/remna.js"
+  cp "$WEB_ROOT/assets/favicon.svg" "$WEBROOT/assets/favicon.svg"
+  mkdir -p "$WEBROOT/assets/js"
+  cp "$WEB_ROOT"/assets/js/*.js "$WEBROOT/assets/js/"
 }
 
 b64_decode_file() {

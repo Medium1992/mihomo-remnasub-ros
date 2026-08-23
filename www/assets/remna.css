@@ -189,6 +189,10 @@ input::placeholder, textarea::placeholder { color: #596772; opacity: 1; }
 .settings-callout b { color: #e2ebf5; font-size: 12px; }
 .settings-callout p { margin: 5px 0 0; font-size: 11px; line-height: 1.55; }
 .settings-callout code { color: #a8c8ef; font: 10px/1.4 ui-monospace, Consolas, monospace; }
+.settings-callout.warning { border-color: rgba(232, 169, 60, .45); color: #e6d3ae; background: rgba(122, 88, 26, .18); }
+.settings-callout.warning > svg { color: var(--warning); }
+.settings-callout.warning b { color: #f6e7c8; }
+.settings-callout.warning code { color: #f0d49a; }
 .header-editor-intro { min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
 .header-editor-intro > span { min-width: 0; display: grid; gap: 3px; }
 .header-editor-intro b { color: #e5ebef; font-size: 13px; font-weight: 650; }
