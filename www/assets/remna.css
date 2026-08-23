@@ -623,3 +623,18 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 .age-public-result b { color: var(--strong); font-size: 12px; }
 .age-public-result small { color: var(--muted); font-size: 11px; }
 .age-public-result input { overflow-x: auto; font: 11px/1.5 ui-monospace, Consolas, monospace; text-overflow: clip; white-space: nowrap; }
+
+/* ── Редакторы переопределений ───────────────────────────────
+   Пресеты вставляют целую верхнеуровневую секцию — ровно ту единицу, в
+   которой работает наложение. */
+.override-editor { display: grid; gap: 9px; }
+.override-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.override-hint { flex: 1 1 260px; min-width: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.override-hint code { color: var(--callout-code); font: 10px/1.4 ui-monospace, Consolas, monospace; }
+.override-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.override-preset { min-height: 28px; padding: 0 10px; border: 1px solid var(--border-hover); border-radius: 9px; color: var(--base-content); background-color: var(--surface-raised); font-size: 11px; font-weight: 650; transition: background .15s ease, border-color .15s ease; }
+.override-preset:hover { border-color: var(--primary); background-color: var(--surface-raised-hover); }
+.override-problem { margin: 0; padding: 8px 11px; border: 1px solid rgba(var(--warning-rgb), .45); border-radius: 9px; color: var(--warn-content); background-color: var(--warn-bg); font-size: 11px; line-height: 1.5; }
+#global-override, #profile-override { width: 100%; padding: 11px 12px; border: 1px solid var(--border-hover); border-radius: 10px; color: var(--viewer-content); background-color: var(--surface-sunken); font: 12px/1.6 ui-monospace, Consolas, monospace; resize: vertical; }
+#global-override:focus, #profile-override:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(var(--primary-rgb), .2); outline: none; }
+@media (max-width: 620px) { .override-toolbar { display: grid; } }

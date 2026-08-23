@@ -108,6 +108,7 @@ export function createProfile() {
   $("profile-local-store-selected").value = "inherit";
   $("profile-local-store-fake-ip").value = "inherit";
   $("profile-local-sniffer").value = "inherit";
+  $("profile-local-mode").value = "inherit";
   $("profile-override").value = "";
   $("profile-local-details").open = false;
   updateLocalOverrideState();
@@ -135,6 +136,7 @@ function populateEditor(profile) {
   $("profile-local-store-selected").value = String(profile.local_store_selected ?? "inherit");
   $("profile-local-store-fake-ip").value = String(profile.local_store_fake_ip ?? "inherit");
   $("profile-local-sniffer").value = profile.local_sniffer_mode || "inherit";
+  $("profile-local-mode").value = profile.local_mode || "inherit";
   $("profile-override").value = decode(profile.local_override_b64);
   $("profile-local-details").open = false;
   updateLocalOverrideState();
@@ -183,6 +185,7 @@ export async function saveProfile(event) {
     local_store_selected: $("profile-local-store-selected").value,
     local_store_fake_ip: $("profile-local-store-fake-ip").value,
     local_sniffer_mode: $("profile-local-sniffer").value,
+    local_mode: $("profile-local-mode").value,
     use_provider_title: $("profile-use-provider-title").checked ? "1" : "0",
     use_provider_interval: $("profile-use-provider-interval").checked ? "1" : "0",
     refresh_minutes: $("profile-refresh").value,

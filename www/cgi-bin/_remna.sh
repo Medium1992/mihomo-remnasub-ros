@@ -168,6 +168,16 @@ valid_number() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; 
 # Приватный ключ age. У обычного получателя префикс AGE-SECRET-KEY-1, у
 # постквантового (age1pq1) — AGE-SECRET-KEY-PQ-1; тело в обоих случаях
 # Bech32 в верхнем регистре.
+# Оверрайд накладывается заменой top-level ключей, поэтому список на верхнем
+# уровне ломает разбор: строка вида "- IP-CIDR,2001:db8::/32,PROXY" неотличима
+# от начала нового ключа. YAML к тому же запрещает табы в отступах.
+override_first_problem() {
+  printf '%s\n' "${1:-}" | awk '
+    /^-[[:space:]]/ { print "list"; exit }
+    /^[[:space:]]*\t/ { print "tab"; exit }
+  '
+}
+
 valid_age_key() {
   case "${1:-}" in
     'AGE-SECRET-KEY-1'*|'AGE-SECRET-KEY-PQ-1'*) ;;
@@ -200,6 +210,7 @@ state_load() {
   ST_ACTIVE_PROFILE_ID= ST_RUN_ENABLED= ST_GLOBAL_HEADERS_B64= ST_LISTENER_MODE=
   ST_REDIR_PORT= ST_TPROXY_PORT= ST_MIHOMO_FIND_PROCESS_MODE= ST_MIHOMO_LOG_LEVEL=
   ST_MIHOMO_IPV6= ST_MIHOMO_STORE_SELECTED= ST_MIHOMO_STORE_FAKE_IP=
+  ST_GLOBAL_OVERRIDE_B64= ST_MIHOMO_MODE=
   ST_MIHOMO_SNIFFER_OVERRIDE= ST_MIHOMO_SNIFFER_ENABLE=
   ST_MIHOMO_SNIFFER_FORCE_DNS_MAPPING= ST_MIHOMO_SNIFFER_PARSE_PURE_IP=
   ST_MIHOMO_SNIFFER_OVERRIDE_DESTINATION= ST_MIHOMO_SNIFFER_QUIC_PORTS_B64=
@@ -217,6 +228,8 @@ state_load() {
   : "${ST_RUN_ENABLED:=0}" "${ST_LISTENER_MODE:=auto}"
   : "${ST_REDIR_PORT:=12345}" "${ST_TPROXY_PORT:=12346}"
   : "${ST_MIHOMO_FIND_PROCESS_MODE:=off}" "${ST_MIHOMO_LOG_LEVEL:=warning}"
+  : "${ST_MIHOMO_MODE:=source}"
+  case "$ST_MIHOMO_MODE" in source|rule|global|direct) ;; *) ST_MIHOMO_MODE=source ;; esac
   : "${ST_MIHOMO_IPV6:=0}" "${ST_MIHOMO_STORE_SELECTED:=1}" "${ST_MIHOMO_STORE_FAKE_IP:=0}"
   : "${ST_MIHOMO_SNIFFER_OVERRIDE:=0}" "${ST_MIHOMO_SNIFFER_ENABLE:=0}"
   : "${ST_MIHOMO_SNIFFER_FORCE_DNS_MAPPING:=0}" "${ST_MIHOMO_SNIFFER_PARSE_PURE_IP:=0}"
@@ -247,13 +260,14 @@ profile_load() {
   P_PROFILE_VERSION= P_NAME_B64= P_SUB_URL_B64= P_SUB_HEADERS_B64=
   P_LOCAL_OVERRIDE_ENABLED= P_LOCAL_OVERRIDE_B64= P_LOCAL_FIND_PROCESS_MODE=
   P_LOCAL_LOG_LEVEL= P_LOCAL_IPV6= P_LOCAL_STORE_SELECTED= P_LOCAL_STORE_FAKE_IP=
-  P_LOCAL_SNIFFER_MODE= P_SUB_USE_PROVIDER_TITLE= P_SUB_USE_PROVIDER_INTERVAL=
+  P_LOCAL_SNIFFER_MODE= P_LOCAL_MODE= P_SUB_USE_PROVIDER_TITLE= P_SUB_USE_PROVIDER_INTERVAL=
   P_SUB_REFRESH_SECONDS= P_SUB_TIMEOUT_SECONDS= P_SUB_INSECURE_TLS=
   P_SUB_AGE_KEY_B64=
   conf_load P_ "$1"
   : "${P_LOCAL_FIND_PROCESS_MODE:=inherit}" "${P_LOCAL_LOG_LEVEL:=inherit}"
   : "${P_LOCAL_IPV6:=inherit}" "${P_LOCAL_STORE_SELECTED:=inherit}"
   : "${P_LOCAL_STORE_FAKE_IP:=inherit}" "${P_LOCAL_SNIFFER_MODE:=inherit}"
+  : "${P_LOCAL_MODE:=inherit}"
   : "${P_SUB_USE_PROVIDER_TITLE:=1}" "${P_SUB_USE_PROVIDER_INTERVAL:=1}"
   : "${P_SUB_REFRESH_SECONDS:=3600}" "${P_SUB_TIMEOUT_SECONDS:=30}"
   : "${P_SUB_INSECURE_TLS:=0}"

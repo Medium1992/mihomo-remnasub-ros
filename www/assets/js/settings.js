@@ -6,6 +6,7 @@ import { renderHeaders, serializedHeaders } from "./headers.js";
 import { load, schedulePoll, onRender } from "./refresh.js";
 import { store, ui } from "./store.js";
 import { THEMES, ACCENT_PRESETS, applyTheme, isTheme, isAccent } from "./theme.js";
+import { OVERRIDE_PRESETS, overrideProblem, insertPreset } from "./presets.js";
 
 export const externalUIPresets = {
   "zashboard": "https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip",
@@ -125,6 +126,37 @@ export function setAccent(color) {
   ui.settingsDirty = true;
 }
 
+
+// Кнопки пресетов строятся узлами: CSP запрещает style-атрибуты из innerHTML,
+// а заодно так проще навесить обработчик без делегирования по data-атрибуту.
+export function renderPresetButtons(containerId, textareaId) {
+  const container = $(containerId);
+  const textarea = $(textareaId);
+  container.replaceChildren(...OVERRIDE_PRESETS.map((preset) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "override-preset";
+    button.textContent = preset.label;
+    button.title = preset.hint;
+    button.addEventListener("click", () => insertPreset(textarea, preset.yaml));
+    return button;
+  }));
+}
+
+// Проверка идёт по мере ввода: те же правила потом применяет CGI, но узнать
+// о них до нажатия «Сохранить» полезнее.
+export function watchOverrideProblems(textareaId, noticeId) {
+  const textarea = $(textareaId);
+  const notice = $(noticeId);
+  const check = () => {
+    const problem = overrideProblem(textarea.value);
+    notice.textContent = problem;
+    notice.classList.toggle("hidden", !problem);
+  };
+  textarea.addEventListener("input", check);
+  check();
+}
+
 export function updateSnifferOverrideState(openOnEnable = false) {
   const enabled = $("mihomo-sniffer-override").checked;
   const details = $("mihomo-sniffer-details");
@@ -224,6 +256,8 @@ export function renderSettings(force = false) {
   renderHeaders("global-header-rows", decode(state.global_headers_b64), true);
   $("mihomo-find-process-mode").value = state.mihomo_find_process_mode || "off";
   $("mihomo-log-level").value = state.mihomo_log_level || "warning";
+  $("mihomo-mode").value = state.mihomo_mode || "source";
+  $("global-override").value = decode(state.global_override_b64);
   $("mihomo-ipv6").checked = Number(state.mihomo_ipv6 ?? 0) !== 0;
   $("mihomo-store-selected").checked = Number(state.mihomo_store_selected ?? 1) !== 0;
   $("mihomo-store-fake-ip").checked = Number(state.mihomo_store_fake_ip ?? 0) !== 0;
@@ -323,6 +357,8 @@ export async function saveSettings() {
     external_ui_secret: $("external-ui-secret").value,
     mihomo_find_process_mode: $("mihomo-find-process-mode").value,
     mihomo_log_level: $("mihomo-log-level").value,
+    mihomo_mode: $("mihomo-mode").value,
+    global_override: $("global-override").value,
     mihomo_ipv6: $("mihomo-ipv6").checked ? "1" : "0",
     mihomo_store_selected: $("mihomo-store-selected").checked ? "1" : "0",
     mihomo_store_fake_ip: $("mihomo-store-fake-ip").checked ? "1" : "0",
