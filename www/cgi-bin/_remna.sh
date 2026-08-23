@@ -144,7 +144,14 @@ conf_load() {
   conf_prefix="$1"
   conf_path="$2"
   [ -f "$conf_path" ] || return 0
-  while IFS='=' read -r conf_key conf_value; do
+  # Строка режется подстановками, а не через IFS='=': read с таким IFS
+  # съедает одиночный '=' в конце значения, то есть padding base64. Из-за
+  # этого URL подписки длиной, кратной 3 с остатком 2, декодировался
+  # обрезанным, и сервер отвечал 401.
+  while IFS= read -r conf_line || [ -n "$conf_line" ]; do
+    case "$conf_line" in *=*) ;; *) continue ;; esac
+    conf_key=${conf_line%%=*}
+    conf_value=${conf_line#*=}
     case "$conf_key" in ''|*[!A-Za-z0-9_]*) continue ;; esac
     export "$conf_prefix$conf_key=$conf_value"
   done < "$conf_path"
@@ -282,8 +289,8 @@ queue_profile_job() {
   queue_file="$JOBS_DIR/$queue_id.request"
   queue_existing=
   if [ -f "$queue_file" ]; then
-    while IFS='=' read -r queue_key queue_value; do
-      if [ "$queue_key" = ACTION ]; then queue_existing="$queue_value"; break; fi
+    while IFS= read -r queue_line || [ -n "$queue_line" ]; do
+      case "$queue_line" in ACTION=*) queue_existing=${queue_line#*=}; break ;; esac
     done < "$queue_file"
   fi
   [ "$queue_existing" != fetch ] || queue_action=fetch
