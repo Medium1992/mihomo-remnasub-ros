@@ -33,6 +33,7 @@
     <symbol id="i-lock" viewBox="0 0 24 24"><rect width="16" height="11" x="4" y="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
     <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.7"/></symbol>
     <symbol id="i-network" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="6" rx="1"/><rect x="14" y="15" width="7" height="6" rx="1"/><rect x="3" y="15" width="7" height="6" rx="1"/><path d="M6.5 9v3h11v3M6.5 12v3"/></symbol>
+    <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18c.9 0 1.6-.7 1.6-1.6 0-.4-.2-.8-.5-1.1-.3-.3-.4-.6-.4-1 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5c0-4.1-4-7.7-9-7.7Z"/><circle cx="7.5" cy="11.5" r="1.2"/><circle cx="10.5" cy="7.5" r="1.2"/><circle cx="15" cy="8.5" r="1.2"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
   </svg>
 
@@ -80,6 +81,7 @@
             <button type="button" data-settings-tab="network"><svg><use href="#i-network"/></svg><span>Сеть Alpine</span></button>
             <button type="button" data-settings-tab="panel"><svg><use href="#i-terminal"/></svg><span>Панель Mihomo</span></button>
             <button type="button" data-settings-tab="override"><svg><use href="#i-file"/></svg><span>Переопределения</span></button>
+            <button type="button" data-settings-tab="appearance"><svg><use href="#i-palette"/></svg><span>Оформление</span></button>
             <button type="button" data-settings-tab="access"><svg><use href="#i-lock"/></svg><span>Доступ</span></button>
           </div>
         </nav>
@@ -207,6 +209,21 @@
               </details>
             </section>
 
+            <section class="settings-section settings-panel" data-settings-panel="appearance">
+              <div class="settings-title"><h2>Тема</h2><p>Оформление веб-панели. Сохраняется в контейнере и действует для всех, кто её открывает</p></div>
+              <div class="theme-grid" id="theme-grid" role="radiogroup" aria-label="Цветовая схема"></div>
+              <div class="settings-title"><h2>Акцентный цвет</h2><p>Заменяет фирменный синий во всей панели, включая полупрозрачные оттенки</p></div>
+              <div class="settings-grid">
+                <div class="setting-row accent-row">
+                  <span><b>Свой цвет</b><small>Оставьте пустым, чтобы использовать цвет выбранной темы</small></span>
+                  <span class="accent-controls">
+                    <span class="accent-presets" id="accent-presets"></span>
+                    <input id="accent-color" type="color" aria-label="Свой акцентный цвет">
+                    <button class="secondary-button" type="button" id="accent-reset">Сбросить</button>
+                  </span>
+                </div>
+              </div>
+            </section>
             <section class="settings-section settings-panel" data-settings-panel="access">
               <div class="settings-title"><h2>Пароль веб-панели</h2><p>Генератор md5crypt-хеша для переменной окружения BASIC_AUTH_HASH</p></div>
               <aside class="settings-callout"><svg><use href="#i-lock"/></svg><div><b>Открытый пароль не сохраняется</b><p>Хеш создаётся локально внутри контейнера через OpenSSL. Добавьте его в ENV <code>BASIC_AUTH_HASH</code> и перезапустите контейнер. Логин задаётся через <code>BASIC_AUTH_USER</code>.</p></div></aside>

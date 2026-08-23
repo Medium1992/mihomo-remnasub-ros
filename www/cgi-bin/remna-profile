@@ -263,6 +263,8 @@ emit_state_tail() {
   printf 'NETWORK_CT_CLOSE=%s\n' "$ST_NETWORK_CT_CLOSE"
   printf 'NETWORK_CT_UNACKNOWLEDGED=%s\n' "$ST_NETWORK_CT_UNACKNOWLEDGED"
   printf 'NETWORK_CT_UDP_STREAM=%s\n' "$ST_NETWORK_CT_UDP_STREAM"
+  printf 'WEB_THEME=%s\n' "$ST_WEB_THEME"
+  printf 'WEB_ACCENT=%s\n' "$ST_WEB_ACCENT"
 }
 
 # Меняет только активный профиль и флаг запуска, всё остальное переносит
@@ -349,6 +351,8 @@ write_container_settings() {
     printf 'NETWORK_CT_CLOSE=%s\n' "$network_ct_close"
     printf 'NETWORK_CT_UNACKNOWLEDGED=%s\n' "$network_ct_unacknowledged"
     printf 'NETWORK_CT_UDP_STREAM=%s\n' "$network_ct_udp_stream"
+    printf 'WEB_THEME=%s\n' "$web_theme"
+    printf 'WEB_ACCENT=%s\n' "$web_accent"
   } > "$tmp_state"
   if ! persist_file_if_changed "$tmp_state" "$STATE"; then
     state_unlock
@@ -414,7 +418,9 @@ if [ "${REQUEST_METHOD:-GET}" = GET ]; then
   printf '"network_ct_time_wait":%s,' "$ST_NETWORK_CT_TIME_WAIT"
   printf '"network_ct_close":%s,' "$ST_NETWORK_CT_CLOSE"
   printf '"network_ct_unacknowledged":%s,' "$ST_NETWORK_CT_UNACKNOWLEDGED"
-  printf '"network_ct_udp_stream":%s' "$ST_NETWORK_CT_UDP_STREAM"
+  printf '"network_ct_udp_stream":%s,' "$ST_NETWORK_CT_UDP_STREAM"
+  printf '"web_theme":"%s",' "$ST_WEB_THEME"
+  printf '"web_accent":"%s"' "$ST_WEB_ACCENT"
   printf '},"profiles":['
   profiles_json
   printf '],"profile":'
@@ -567,6 +573,8 @@ case "$action" in
     network_ct_close=$(form_value network_ct_close)
     network_ct_unacknowledged=$(form_value network_ct_unacknowledged)
     network_ct_udp_stream=$(form_value network_ct_udp_stream)
+    web_theme=$(form_value web_theme)
+    web_accent=$(form_value web_accent)
     global_headers=$(printf '%s' "$global_headers" | tr -d '\r')
     [ "${#global_headers}" -le 16384 ] || deny 'Global headers are too large'
     valid_header_block "$global_headers" || deny 'Global headers contain an invalid or duplicate name'
@@ -605,6 +613,12 @@ case "$action" in
     [ "${#mihomo_sniffer_force_domain}" -le 16384 ] && [ "${#mihomo_sniffer_skip_domain}" -le 16384 ] && [ "${#mihomo_sniffer_skip_src_address}" -le 16384 ] && [ "${#mihomo_sniffer_skip_dst_address}" -le 16384 ] || deny 'Sniffer list is too large'
     case "$network_disable_ipv6:$network_disable_multicast" in [01]:[01]) ;; *) deny 'invalid Alpine network switches' ;; esac
     case "$network_qdisc" in fq_codel|cake|codel|sfq|pfifo|bfifo|system) ;; *) deny 'invalid qdisc mode' ;; esac
+    case "$web_theme" in auto|dark|light|graphite|midnight|forest|sepia) ;; *) deny 'invalid web theme' ;; esac
+    case "$web_accent" in
+      '') ;;
+      '#'[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;;
+      *) deny 'Accent colour must be #rrggbb' ;;
+    esac
     for network_timeout in "$network_ct_established" "$network_ct_syn_sent" "$network_ct_syn_recv" "$network_ct_fin_wait" "$network_ct_close_wait" "$network_ct_last_ack" "$network_ct_time_wait" "$network_ct_close" "$network_ct_unacknowledged" "$network_ct_udp_stream"; do
       valid_number "$network_timeout" && [ "$network_timeout" -ge 1 ] && [ "$network_timeout" -le 604800 ] || deny 'conntrack timeouts must be 1..604800 seconds'
     done

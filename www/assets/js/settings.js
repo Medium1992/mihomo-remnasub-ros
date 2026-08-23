@@ -5,6 +5,7 @@ import { send, requestJson } from "./api.js";
 import { renderHeaders, serializedHeaders } from "./headers.js";
 import { load, schedulePoll, onRender } from "./refresh.js";
 import { store, ui } from "./store.js";
+import { THEMES, ACCENT_PRESETS, applyTheme, isTheme, isAccent } from "./theme.js";
 
 export const externalUIPresets = {
   "zashboard": "https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip",
@@ -25,6 +26,104 @@ export const networkTimeoutDefaults = {
   "network-ct-unacknowledged": 300,
   "network-ct-udp-stream": 180
 };
+
+
+// Выбор применяется к странице сразу (превью), а уезжает в state.conf только
+// по кнопке "Сохранить" вместе с остальными настройками.
+let pendingTheme = "auto";
+let pendingAccent = "";
+
+export function currentTheme() { return pendingTheme; }
+export function currentAccent() { return pendingAccent; }
+
+// Превью рисуется теми же токенами, что и сама тема: временный элемент с
+// нужным data-theme отдаёт свои вычисленные значения.
+function themeSwatch(themeId) {
+  const probe = document.createElement("div");
+  probe.dataset.theme = themeId === "auto"
+    ? (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")
+    : themeId;
+  probe.style.display = "none";
+  document.body.appendChild(probe);
+  const cs = getComputedStyle(probe);
+  const pick = (name) => cs.getPropertyValue(name).trim();
+  const swatch = {
+    sidebar: pick("--base-100"),
+    canvas: pick("--base-200"),
+    accent: isAccent(pendingAccent) ? pendingAccent : `rgb(${pick("--primary-rgb")})`,
+    text: pick("--muted")
+  };
+  probe.remove();
+  return swatch;
+}
+
+// Разметка строится узлами, а цвета выставляются через CSSOM: CSP этого
+// проекта содержит style-src 'self' без 'unsafe-inline', поэтому атрибут
+// style= в innerHTML браузер молча игнорирует.
+function buildThemeCard(theme) {
+  const swatch = themeSwatch(theme.id);
+  const card = document.createElement("button");
+  card.className = "theme-card";
+  card.type = "button";
+  card.setAttribute("role", "radio");
+  card.dataset.themeOption = theme.id;
+  card.setAttribute("aria-checked", String(theme.id === pendingTheme));
+
+  const preview = document.createElement("span");
+  preview.className = "theme-preview";
+  preview.style.backgroundColor = swatch.canvas;
+
+  const rail = document.createElement("i");
+  rail.style.backgroundColor = swatch.sidebar;
+
+  const lines = document.createElement("span");
+  const accentBar = document.createElement("em");
+  accentBar.style.backgroundColor = swatch.accent;
+  accentBar.style.width = "70%";
+  const textBar = document.createElement("em");
+  textBar.style.backgroundColor = swatch.text;
+  textBar.style.width = "45%";
+  lines.append(accentBar, textBar);
+  preview.append(rail, lines);
+
+  const label = document.createElement("strong");
+  label.textContent = theme.label;
+  card.append(preview, label);
+  return card;
+}
+
+function buildAccentSwatch(color) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.dataset.accentPreset = color;
+  button.title = color;
+  button.setAttribute("aria-label", `Акцент ${color}`);
+  button.setAttribute("aria-pressed", String(color.toLowerCase() === pendingAccent.toLowerCase()));
+  button.style.backgroundColor = color;
+  return button;
+}
+
+function renderThemeGrid() {
+  const grid = $("theme-grid");
+  grid.replaceChildren(...THEMES.map(buildThemeCard));
+  $("accent-presets").replaceChildren(...ACCENT_PRESETS.map(buildAccentSwatch));
+  $("accent-color").value = isAccent(pendingAccent) ? pendingAccent : "#4773b7";
+}
+
+export function setTheme(themeId) {
+  if (!isTheme(themeId)) return;
+  pendingTheme = themeId;
+  applyTheme(pendingTheme, pendingAccent);
+  renderThemeGrid();
+  ui.settingsDirty = true;
+}
+
+export function setAccent(color) {
+  pendingAccent = isAccent(color) ? color : "";
+  applyTheme(pendingTheme, pendingAccent);
+  renderThemeGrid();
+  ui.settingsDirty = true;
+}
 
 export function updateSnifferOverrideState(openOnEnable = false) {
   const enabled = $("mihomo-sniffer-override").checked;
@@ -182,6 +281,10 @@ export function renderSettings(force = false) {
   updateExternalUIPreset();
   $("external-ui-secret").value = decode(state.external_ui_secret_b64);
   updateSecretWarning();
+  pendingTheme = isTheme(state.web_theme) ? state.web_theme : "auto";
+  pendingAccent = isAccent(state.web_accent) ? state.web_accent : "";
+  applyTheme(pendingTheme, pendingAccent);
+  renderThemeGrid();
   const uiState = $("external-ui-state");
   const uiMessage = decode(runtime.external_ui_message_b64);
   if (runtime.external_ui_state === "downloading") {
@@ -209,6 +312,8 @@ export async function saveSettings() {
   }
   const result = await send({
     action: "save-settings",
+    web_theme: pendingTheme,
+    web_accent: pendingAccent,
     global_headers: serializedHeaders("global-header-rows", true),
     listener_mode: mode,
     redir_port: redirPort,

@@ -95,6 +95,8 @@ The UI reads standard Remnawave metadata. It also reports VLESS proxies with an 
 - **Alpine network**: IPv6, multicast, qdisc, and conntrack timeouts.
 - **Mihomo UI**: Zashboard/MetaCubeXD/Yacd-meta/custom archive and controller secret.
 - **Global overrides**: managed Mihomo and sniffer settings.
+- **Appearance**: dark and light themes, the Graphite, Midnight, Forest and Sepia presets, and a
+  custom accent colour. The choice is stored in the container and applies to everyone opening the panel.
 - **Access**: md5crypt generator for `BASIC_AUTH_HASH`.
 
 ## 🌐 HTTP Headers
