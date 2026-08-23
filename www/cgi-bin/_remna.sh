@@ -185,6 +185,7 @@ state_load() {
   ST_NETWORK_CT_SYN_RECV= ST_NETWORK_CT_FIN_WAIT= ST_NETWORK_CT_CLOSE_WAIT=
   ST_NETWORK_CT_LAST_ACK= ST_NETWORK_CT_TIME_WAIT= ST_NETWORK_CT_CLOSE=
   ST_NETWORK_CT_UNACKNOWLEDGED= ST_NETWORK_CT_UDP_STREAM=
+  ST_WEB_THEME= ST_WEB_ACCENT=
   conf_load ST_ "$STATE"
   : "${ST_RUN_ENABLED:=0}" "${ST_LISTENER_MODE:=auto}"
   : "${ST_REDIR_PORT:=12345}" "${ST_TPROXY_PORT:=12346}"
@@ -203,6 +204,14 @@ state_load() {
   : "${ST_NETWORK_CT_CLOSE_WAIT:=10}" "${ST_NETWORK_CT_LAST_ACK:=10}"
   : "${ST_NETWORK_CT_TIME_WAIT:=10}" "${ST_NETWORK_CT_CLOSE:=10}"
   : "${ST_NETWORK_CT_UNACKNOWLEDGED:=300}" "${ST_NETWORK_CT_UDP_STREAM:=180}"
+  : "${ST_WEB_THEME:=auto}"
+  case "$ST_WEB_THEME" in auto|dark|light|graphite|midnight|forest|sepia) ;; *) ST_WEB_THEME=auto ;; esac
+  # Акцент отдаётся в JSON голой строкой, поэтому пропускаем только #rrggbb.
+  case "$ST_WEB_ACCENT" in
+    '') ;;
+    '#'[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;;
+    *) ST_WEB_ACCENT= ;;
+  esac
   case "$ST_MIHOMO_SNIFFER_OVERRIDE" in 0|1) ;; *) ST_MIHOMO_SNIFFER_OVERRIDE=0 ;; esac
 }
 

@@ -4,6 +4,7 @@ import { copyViewer, selectViewerContents } from "./yaml.js";
 import { headerRow } from "./headers.js";
 import { load, schedulePoll, pollDelay } from "./refresh.js";
 import { ui } from "./store.js";
+import { applyMirroredTheme, watchSystemTheme } from "./theme.js";
 import * as subscriptions from "./subscriptions.js";
 import * as editor from "./editor.js";
 import * as viewers from "./viewers.js";
@@ -15,6 +16,10 @@ import * as settings from "./settings.js";
 // Basic-авторизация кешируется по origin'у и подставляется сама, так что
 // клик по приманке уходит в наши кнопки. CSRF-guard от этого не спасает --
 // запрос идёт изнутри нашей же страницы.
+// Тема применяется из зеркала в localStorage до первого запроса, иначе
+// светлая панель успевает мигнуть тёмной, пока не ответит CGI.
+applyMirroredTheme();
+
 if (window.top !== window.self) {
   document.documentElement.textContent = "RemnaSub RoS: страница не может быть открыта во фрейме";
   try { window.top.location = window.self.location; } catch (_) {}
@@ -48,6 +53,18 @@ function bootstrap() {
     button.title = reveal ? "Скрыть пароль" : "Показать пароль";
   }));
   all("[data-open-mihomo]").forEach((button) => button.addEventListener("click", settings.openMihomo));
+
+  $("theme-grid").addEventListener("click", (event) => {
+    const card = event.target.closest("[data-theme-option]");
+    if (card) settings.setTheme(card.dataset.themeOption);
+  });
+  $("accent-presets").addEventListener("click", (event) => {
+    const swatch = event.target.closest("[data-accent-preset]");
+    if (swatch) settings.setAccent(swatch.dataset.accentPreset);
+  });
+  $("accent-color").addEventListener("input", (event) => settings.setAccent(event.target.value));
+  $("accent-reset").addEventListener("click", () => settings.setAccent(""));
+  watchSystemTheme(settings.currentTheme, settings.currentAccent);
 
   $("add-profile").addEventListener("click", protectedAction(editor.createProfile));
   $("empty-add-profile").addEventListener("click", protectedAction(editor.createProfile));
