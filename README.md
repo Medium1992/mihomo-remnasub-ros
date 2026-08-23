@@ -10,6 +10,8 @@
 ![Platforms](https://img.shields.io/badge/arch-amd64%20%7C%20arm64%20%7C%20armv7%20%7C%20armv5-blue)
 [![Telegram](https://img.shields.io/badge/Telegram-group-blue?logo=telegram)](https://t.me/+96HVPF3Ww6o3YTNi)
 
+![RemnaSub RoS WebUI](/docs/screenshots/subscriptions.png)
+
 ## ✨ Features
 
 - 📚 Multiple complete YAML subscriptions with an active profile, manual/periodic refresh, and per-profile settings.
@@ -88,6 +90,8 @@ Open `http://192.168.253.2/` after startup. RouterOS routing/mangle rules must d
 
 The UI reads standard Remnawave metadata. It also reports VLESS proxies with an all-zero UUID, which commonly indicates an expired, disabled, or restricted subscription despite an HTTP 200 response.
 
+![Settings - overrides](/docs/screenshots/settings-overrides.png)
+
 ### Settings
 
 - **Headers**: global request headers for every subscription.
@@ -99,7 +103,19 @@ The UI reads standard Remnawave metadata. It also reports VLESS proxies with an 
   custom accent colour. The choice is stored in the container and applies to everyone opening the panel.
 - **Access**: md5crypt generator for `BASIC_AUTH_HASH`.
 
+![Settings - appearance](/docs/screenshots/settings-appearance.png)
+
+A subscription's own settings open from its row: URL, interval, timeout, decryption key and per-profile overrides.
+
+![Subscription editor](/docs/screenshots/subscription-editor.png)
+
+The resulting configuration and the container log are available straight from the panel.
+
+![Runtime YAML](/docs/screenshots/runtime-yaml.png)
+
 ## 🌐 HTTP Headers
+
+![Settings - headers](/docs/screenshots/settings-headers.png)
 
 ### Default request headers
 
@@ -126,32 +142,6 @@ These five keys are always sent, but their values are editable. Any custom heade
 | `announce` | Provider message; plain text and `base64:` are supported. |
 
 The final HTTP status line, status code, response size, and fetch time are stored as well.
-
-## 🔒 Encrypted subscriptions
-
-Remnawave can serve the subscription encrypted, configured in a Subscription Response Rule through `responseModifications.encryption`:
-
-```json
-"responseType": "MIHOMO",
-"responseModifications": {
-  "encryption": { "key": "age1...", "method": "age1" }
-}
-```
-
-The body arrives as [age](https://age-encryption.org) in ASCII armor, starting with `-----BEGIN AGE ENCRYPTED FILE-----`. Both methods are supported: `age1` (X25519) and `age1pq1` (the ML-KEM-768 + X25519 post-quantum hybrid).
-
-The container decrypts the response right after download, before overrides are applied and before `mihomo -t` validates it, so everything downstream behaves exactly as with plain YAML -- including the **Downloaded YAML** viewer in the web UI. Decryption is done by the core itself: mihomo ships age.
-
-**Setup:**
-
-1. Open the subscription card and find the **Response encryption** block.
-2. Press **Generate** with the method you need. The pair is created inside the container: the private key goes straight into the field and never leaves, the public key is shown for copying.
-3. Paste the public key into `encryption.key` of the panel's response rule and select the same method there.
-4. Save the subscription -- it will be refetched, now encrypted.
-
-If the pair was already generated in the panel (`docker exec -it remnawave cli` -> *Generate keypairs*), just paste its private half (`AGE-SECRET-KEY-1...` or `AGE-SECRET-KEY-PQ-1...`) into the key field.
-
-An empty field means the subscription is treated as unencrypted. If the server sends an encrypted body anyway and no key is set, the card shows a clear error instead of an opaque YAML parse failure.
 
 ## 🧩 YAML Override Rules
 
@@ -180,7 +170,35 @@ Two formatting rules are checked before saving, because both break the parser:
 
 Keys the container sets itself after the override is applied are pointless to write here: `find-process-mode`, `log-level`, `ipv6`, `profile`, `listeners`, `redir-port`, `tproxy-port`, `tun`, `external-controller*`, `external-ui*`, `secret`. The editor flags them as you type.
 
+## 🔒 Encrypted subscriptions
+
+Remnawave can serve the subscription encrypted, configured in a Subscription Response Rule through `responseModifications.encryption`:
+
+```json
+"responseType": "MIHOMO",
+"responseModifications": {
+  "encryption": { "key": "age1...", "method": "age1" }
+}
+```
+
+The body arrives as [age](https://age-encryption.org) in ASCII armor, starting with `-----BEGIN AGE ENCRYPTED FILE-----`. Both methods are supported: `age1` (X25519) and `age1pq1` (the ML-KEM-768 + X25519 post-quantum hybrid).
+
+The container decrypts the response right after download, before overrides are applied and before `mihomo -t` validates it, so everything downstream behaves exactly as with plain YAML -- including the **Downloaded YAML** viewer in the web UI. Decryption is done by the core itself: mihomo ships age.
+
+**Setup:**
+
+1. Open the subscription card and find the **Response encryption** block.
+2. Press **Generate** with the method you need. The pair is created inside the container: the private key goes straight into the field and never leaves, the public key is shown for copying.
+3. Paste the public key into `encryption.key` of the panel's response rule and select the same method there.
+4. Save the subscription -- it will be refetched, now encrypted.
+
+If the pair was already generated in the panel (`docker exec -it remnawave cli` -> *Generate keypairs*), just paste its private half (`AGE-SECRET-KEY-1...` or `AGE-SECRET-KEY-PQ-1...`) into the key field.
+
+An empty field means the subscription is treated as unencrypted. If the server sends an encrypted body anyway and no key is set, the card shows a clear error instead of an opaque YAML parse failure.
+
 ## 🔀 Inbound Modes
+![Settings - inbound](/docs/screenshots/settings-traffic.png)
+
 
 | Mode | Behavior |
 |---|---|
@@ -209,7 +227,6 @@ Subscription and runtime settings are stored under `/etc/mihomo`; ENV is only us
 | `BASIC_AUTH_USER` | `admin` | HTTP Basic Auth username. |
 | `BASIC_AUTH_HASH` | hash of `admin` | md5crypt value (`$1$...`), generated under **Settings → Access**. |
 | `BASIC_AUTH` | `on` | `off` disables authentication; use only on an isolated trusted network. |
-| `WEB_CSRF` | `on` | Controls same-origin checking for the hash-generator CGI. Main mutating subscription endpoints always require same-origin POST. |
 
 Escape every `$` as `\$` when entering the hash in a RouterOS terminal command.
 
@@ -257,16 +274,6 @@ Mihomo itself may create `cache.db` and geodata files under `/etc/mihomo` when r
 - Subscription/UI sources are restricted to HTTP(S), and temporary files use restrictive permissions.
 - A candidate configuration never replaces the running one before `mihomo -t` succeeds.
 
-## 🐳 Build and Architectures
+## 🐳 Build
 
-`latest` is a multi-architecture image containing amd64 v3, arm64, armv7, and armv5. Separate `amd64v1`, `amd64v2`, and `amd64v4` tags are published as well.
-
-| Build ARG | Default | Purpose |
-|---|---|---|
-| `MIHOMO_VERSION` | `latest` | Core release tag. |
-| `MIHOMO_CUSTOM_CORE` | `0` | `1` downloads from `MIHOMO_CUSTOM_REPO`; release workflows currently default to the custom core. |
-| `MIHOMO_REPO` | `MetaCubeX/mihomo` | Official core repository. |
-| `MIHOMO_CUSTOM_REPO` | `Medium1992/mihomo-proxy-ros` | Compatible custom release repository. |
-| `AMD64VERSION` | `v3` | amd64 level: `v1`, `v2`, `v3`, or `v4`. |
-
-armv5 uses the compact Buildroot filesystem from `rootfs.tar`; all other targets use Alpine.
+The `latest` tag carries amd64 v3, arm64, armv7 and armv5; separate `amd64v1`, `amd64v2` and `amd64v4` images are published for x86-64. Dockerfile arguments and per-architecture details live in [docs/BUILD.md](/docs/BUILD.md).
