@@ -165,9 +165,6 @@ conf_load() {
 
 valid_number() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
-# Приватный ключ age. У обычного получателя префикс AGE-SECRET-KEY-1, у
-# постквантового (age1pq1) — AGE-SECRET-KEY-PQ-1; тело в обоих случаях
-# Bech32 в верхнем регистре.
 # Оверрайд накладывается заменой top-level ключей, поэтому список на верхнем
 # уровне ломает разбор: строка вида "- IP-CIDR,2001:db8::/32,PROXY" неотличима
 # от начала нового ключа. YAML к тому же запрещает табы в отступах.
@@ -178,6 +175,9 @@ override_first_problem() {
   '
 }
 
+# Приватный ключ age. У обычного получателя префикс AGE-SECRET-KEY-1, у
+# постквантового (age1pq1) — AGE-SECRET-KEY-PQ-1; тело в обоих случаях
+# Bech32 в верхнем регистре.
 valid_age_key() {
   case "${1:-}" in
     'AGE-SECRET-KEY-1'*|'AGE-SECRET-KEY-PQ-1'*) ;;
@@ -211,6 +211,9 @@ state_load() {
   ST_REDIR_PORT= ST_TPROXY_PORT= ST_MIHOMO_FIND_PROCESS_MODE= ST_MIHOMO_LOG_LEVEL=
   ST_MIHOMO_IPV6= ST_MIHOMO_STORE_SELECTED= ST_MIHOMO_STORE_FAKE_IP=
   ST_GLOBAL_OVERRIDE_B64= ST_MIHOMO_MODE=
+  ST_INBOUND_STRIP_SOCKS= ST_INBOUND_STRIP_HTTP= ST_INBOUND_STRIP_MIXED=
+  ST_LOCAL_SOCKS_ENABLED= ST_LOCAL_SOCKS_PORT= ST_LOCAL_SOCKS_USER_B64= ST_LOCAL_SOCKS_PASS_B64=
+  ST_LOCAL_HTTP_ENABLED= ST_LOCAL_HTTP_PORT= ST_LOCAL_HTTP_USER_B64= ST_LOCAL_HTTP_PASS_B64=
   ST_MIHOMO_SNIFFER_OVERRIDE= ST_MIHOMO_SNIFFER_ENABLE=
   ST_MIHOMO_SNIFFER_FORCE_DNS_MAPPING= ST_MIHOMO_SNIFFER_PARSE_PURE_IP=
   ST_MIHOMO_SNIFFER_OVERRIDE_DESTINATION= ST_MIHOMO_SNIFFER_QUIC_PORTS_B64=
@@ -230,6 +233,16 @@ state_load() {
   : "${ST_MIHOMO_FIND_PROCESS_MODE:=off}" "${ST_MIHOMO_LOG_LEVEL:=warning}"
   : "${ST_MIHOMO_MODE:=source}"
   case "$ST_MIHOMO_MODE" in source|rule|global|direct) ;; *) ST_MIHOMO_MODE=source ;; esac
+  : "${ST_INBOUND_STRIP_SOCKS:=1}" "${ST_INBOUND_STRIP_HTTP:=1}" "${ST_INBOUND_STRIP_MIXED:=1}"
+  : "${ST_LOCAL_SOCKS_ENABLED:=0}" "${ST_LOCAL_HTTP_ENABLED:=0}"
+  : "${ST_LOCAL_SOCKS_PORT:=1080}" "${ST_LOCAL_HTTP_PORT:=1081}"
+  case "$ST_INBOUND_STRIP_SOCKS" in 0|1) ;; *) ST_INBOUND_STRIP_SOCKS=1 ;; esac
+  case "$ST_INBOUND_STRIP_HTTP" in 0|1) ;; *) ST_INBOUND_STRIP_HTTP=1 ;; esac
+  case "$ST_INBOUND_STRIP_MIXED" in 0|1) ;; *) ST_INBOUND_STRIP_MIXED=1 ;; esac
+  case "$ST_LOCAL_SOCKS_ENABLED" in 0|1) ;; *) ST_LOCAL_SOCKS_ENABLED=0 ;; esac
+  case "$ST_LOCAL_HTTP_ENABLED" in 0|1) ;; *) ST_LOCAL_HTTP_ENABLED=0 ;; esac
+  valid_number "$ST_LOCAL_SOCKS_PORT" || ST_LOCAL_SOCKS_PORT=1080
+  valid_number "$ST_LOCAL_HTTP_PORT" || ST_LOCAL_HTTP_PORT=1081
   : "${ST_MIHOMO_IPV6:=0}" "${ST_MIHOMO_STORE_SELECTED:=1}" "${ST_MIHOMO_STORE_FAKE_IP:=0}"
   : "${ST_MIHOMO_SNIFFER_OVERRIDE:=0}" "${ST_MIHOMO_SNIFFER_ENABLE:=0}"
   : "${ST_MIHOMO_SNIFFER_FORCE_DNS_MAPPING:=0}" "${ST_MIHOMO_SNIFFER_PARSE_PURE_IP:=0}"

@@ -246,6 +246,17 @@ emit_state_tail() {
   printf 'MIHOMO_SNIFFER_QUIC_PORTS_B64=%s\n' "$ST_MIHOMO_SNIFFER_QUIC_PORTS_B64"
   printf 'MIHOMO_MODE=%s\n' "$ST_MIHOMO_MODE"
   printf 'GLOBAL_OVERRIDE_B64=%s\n' "$ST_GLOBAL_OVERRIDE_B64"
+  printf 'INBOUND_STRIP_SOCKS=%s\n' "$ST_INBOUND_STRIP_SOCKS"
+  printf 'INBOUND_STRIP_HTTP=%s\n' "$ST_INBOUND_STRIP_HTTP"
+  printf 'INBOUND_STRIP_MIXED=%s\n' "$ST_INBOUND_STRIP_MIXED"
+  printf 'LOCAL_SOCKS_ENABLED=%s\n' "$ST_LOCAL_SOCKS_ENABLED"
+  printf 'LOCAL_SOCKS_PORT=%s\n' "$ST_LOCAL_SOCKS_PORT"
+  printf 'LOCAL_SOCKS_USER_B64=%s\n' "$ST_LOCAL_SOCKS_USER_B64"
+  printf 'LOCAL_SOCKS_PASS_B64=%s\n' "$ST_LOCAL_SOCKS_PASS_B64"
+  printf 'LOCAL_HTTP_ENABLED=%s\n' "$ST_LOCAL_HTTP_ENABLED"
+  printf 'LOCAL_HTTP_PORT=%s\n' "$ST_LOCAL_HTTP_PORT"
+  printf 'LOCAL_HTTP_USER_B64=%s\n' "$ST_LOCAL_HTTP_USER_B64"
+  printf 'LOCAL_HTTP_PASS_B64=%s\n' "$ST_LOCAL_HTTP_PASS_B64"
   printf 'MIHOMO_SNIFFER_TLS_PORTS_B64=%s\n' "$ST_MIHOMO_SNIFFER_TLS_PORTS_B64"
   printf 'MIHOMO_SNIFFER_HTTP_PORTS_B64=%s\n' "$ST_MIHOMO_SNIFFER_HTTP_PORTS_B64"
   printf 'MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION=%s\n' "$ST_MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION"
@@ -327,6 +338,17 @@ write_container_settings() {
     printf 'MIHOMO_LOG_LEVEL=%s\n' "$mihomo_log_level"
     printf 'MIHOMO_MODE=%s\n' "$mihomo_mode"
     printf 'GLOBAL_OVERRIDE_B64=%s\n' "$(b64 "$global_override")"
+    printf 'INBOUND_STRIP_SOCKS=%s\n' "$inbound_strip_socks"
+    printf 'INBOUND_STRIP_HTTP=%s\n' "$inbound_strip_http"
+    printf 'INBOUND_STRIP_MIXED=%s\n' "$inbound_strip_mixed"
+    printf 'LOCAL_SOCKS_ENABLED=%s\n' "$local_socks_enabled"
+    printf 'LOCAL_SOCKS_PORT=%s\n' "$local_socks_port"
+    printf 'LOCAL_SOCKS_USER_B64=%s\n' "$(b64 "$local_socks_user")"
+    printf 'LOCAL_SOCKS_PASS_B64=%s\n' "$(b64 "$local_socks_pass")"
+    printf 'LOCAL_HTTP_ENABLED=%s\n' "$local_http_enabled"
+    printf 'LOCAL_HTTP_PORT=%s\n' "$local_http_port"
+    printf 'LOCAL_HTTP_USER_B64=%s\n' "$(b64 "$local_http_user")"
+    printf 'LOCAL_HTTP_PASS_B64=%s\n' "$(b64 "$local_http_pass")"
     printf 'MIHOMO_IPV6=%s\n' "$mihomo_ipv6"
     printf 'MIHOMO_STORE_SELECTED=%s\n' "$mihomo_store_selected"
     printf 'MIHOMO_STORE_FAKE_IP=%s\n' "$mihomo_store_fake_ip"
@@ -394,6 +416,17 @@ if [ "${REQUEST_METHOD:-GET}" = GET ]; then
   printf '"mihomo_log_level":"%s",' "$ST_MIHOMO_LOG_LEVEL"
   printf '"mihomo_mode":"%s",' "$ST_MIHOMO_MODE"
   printf '"global_override_b64":"%s",' "$ST_GLOBAL_OVERRIDE_B64"
+  printf '"inbound_strip_socks":%s,' "$ST_INBOUND_STRIP_SOCKS"
+  printf '"inbound_strip_http":%s,' "$ST_INBOUND_STRIP_HTTP"
+  printf '"inbound_strip_mixed":%s,' "$ST_INBOUND_STRIP_MIXED"
+  printf '"local_socks_enabled":%s,' "$ST_LOCAL_SOCKS_ENABLED"
+  printf '"local_socks_port":%s,' "$ST_LOCAL_SOCKS_PORT"
+  printf '"local_socks_user_b64":"%s",' "$ST_LOCAL_SOCKS_USER_B64"
+  printf '"local_socks_pass_b64":"%s",' "$ST_LOCAL_SOCKS_PASS_B64"
+  printf '"local_http_enabled":%s,' "$ST_LOCAL_HTTP_ENABLED"
+  printf '"local_http_port":%s,' "$ST_LOCAL_HTTP_PORT"
+  printf '"local_http_user_b64":"%s",' "$ST_LOCAL_HTTP_USER_B64"
+  printf '"local_http_pass_b64":"%s",' "$ST_LOCAL_HTTP_PASS_B64"
   printf '"mihomo_ipv6":%s,' "$ST_MIHOMO_IPV6"
   printf '"mihomo_store_selected":%s,' "$ST_MIHOMO_STORE_SELECTED"
   printf '"mihomo_store_fake_ip":%s,' "$ST_MIHOMO_STORE_FAKE_IP"
@@ -558,6 +591,17 @@ case "$action" in
     mihomo_log_level=$(form_value mihomo_log_level)
     mihomo_mode=$(form_value mihomo_mode)
     global_override=$(form_value global_override)
+    inbound_strip_socks=$(form_value inbound_strip_socks)
+    inbound_strip_http=$(form_value inbound_strip_http)
+    inbound_strip_mixed=$(form_value inbound_strip_mixed)
+    local_socks_enabled=$(form_value local_socks_enabled)
+    local_socks_port=$(form_value local_socks_port)
+    local_socks_user=$(form_value local_socks_user)
+    local_socks_pass=$(form_value local_socks_pass)
+    local_http_enabled=$(form_value local_http_enabled)
+    local_http_port=$(form_value local_http_port)
+    local_http_user=$(form_value local_http_user)
+    local_http_pass=$(form_value local_http_pass)
     mihomo_ipv6=$(form_value mihomo_ipv6)
     mihomo_store_selected=$(form_value mihomo_store_selected)
     mihomo_store_fake_ip=$(form_value mihomo_store_fake_ip)
@@ -611,6 +655,28 @@ case "$action" in
     case "$mihomo_find_process_mode" in off|strict|always) ;; *) deny 'invalid find-process-mode' ;; esac
     case "$mihomo_log_level" in silent|error|warning|info|debug) ;; *) deny 'invalid log-level' ;; esac
     case "$mihomo_mode" in source|rule|global|direct) ;; *) deny 'invalid mode' ;; esac
+    case "$inbound_strip_socks:$inbound_strip_http:$inbound_strip_mixed" in [01]:[01]:[01]) ;; *) deny 'invalid inbound strip switches' ;; esac
+    case "$local_socks_enabled:$local_http_enabled" in [01]:[01]) ;; *) deny 'invalid local inbound switches' ;; esac
+    valid_number "$local_socks_port" && [ "$local_socks_port" -ge 1 ] && [ "$local_socks_port" -le 65535 ] || deny 'Порт SOCKS должен быть 1..65535' 
+    valid_number "$local_http_port" && [ "$local_http_port" -ge 1 ] && [ "$local_http_port" -le 65535 ] || deny 'Порт HTTP должен быть 1..65535' 
+    # Порты локальных входов не должны спорить ни между собой, ни с портами
+    # перехвата: ядро откажется поднимать второй слушатель на занятом порту.
+    if [ "$local_socks_enabled" = 1 ] && [ "$local_http_enabled" = 1 ] && [ "$local_socks_port" = "$local_http_port" ]; then
+      deny 'Порты SOCKS и HTTP должны отличаться' 
+    fi
+    for busy_port in "$redir_port" "$tproxy_port"; do
+      [ "$local_socks_enabled" != 1 ] || [ "$local_socks_port" != "$busy_port" ] || deny 'Порт SOCKS занят портом перехвата' 
+      [ "$local_http_enabled" != 1 ] || [ "$local_http_port" != "$busy_port" ] || deny 'Порт HTTP занят портом перехвата' 
+    done
+    for inbound_credential in "$local_socks_user" "$local_socks_pass" "$local_http_user" "$local_http_pass"; do
+      clean_credential=$(printf '%s' "$inbound_credential" | tr -d '[:space:]')
+      [ "$clean_credential" = "$inbound_credential" ] || deny 'Логин и пароль не должны содержать пробелов' 
+      [ "${#inbound_credential}" -le 128 ] || deny 'Логин или пароль слишком длинный' 
+    done
+    # Логин без пароля ядро примет, но такой вход считается открытым — лучше
+    # отказать явно, чем оставить прокси в LAN с половиной авторизации.
+    [ -z "$local_socks_user" ] || [ -n "$local_socks_pass" ] || deny 'Для SOCKS задан логин без пароля' 
+    [ -z "$local_http_user" ] || [ -n "$local_http_pass" ] || deny 'Для HTTP задан логин без пароля' 
     global_override=$(printf '%s' "$global_override" | tr -d '\r')
     [ "${#global_override}" -le 32768 ] || deny 'Глобальный оверрайд слишком большой (максимум 32 КиБ)'
     case "$(override_first_problem "$global_override")" in
@@ -656,6 +722,17 @@ case "$action" in
     [ "$ST_MIHOMO_LOG_LEVEL" = "$mihomo_log_level" ] || runtime_settings_changed=true
     [ "$ST_MIHOMO_MODE" = "$mihomo_mode" ] || runtime_settings_changed=true
     b64_text_matches "$ST_GLOBAL_OVERRIDE_B64" "$global_override" || runtime_settings_changed=true
+    [ "$ST_INBOUND_STRIP_SOCKS" = "$inbound_strip_socks" ] || runtime_settings_changed=true
+    [ "$ST_INBOUND_STRIP_HTTP" = "$inbound_strip_http" ] || runtime_settings_changed=true
+    [ "$ST_INBOUND_STRIP_MIXED" = "$inbound_strip_mixed" ] || runtime_settings_changed=true
+    [ "$ST_LOCAL_SOCKS_ENABLED" = "$local_socks_enabled" ] || runtime_settings_changed=true
+    [ "$ST_LOCAL_SOCKS_PORT" = "$local_socks_port" ] || runtime_settings_changed=true
+    b64_text_matches "$ST_LOCAL_SOCKS_USER_B64" "$local_socks_user" || runtime_settings_changed=true
+    b64_text_matches "$ST_LOCAL_SOCKS_PASS_B64" "$local_socks_pass" || runtime_settings_changed=true
+    [ "$ST_LOCAL_HTTP_ENABLED" = "$local_http_enabled" ] || runtime_settings_changed=true
+    [ "$ST_LOCAL_HTTP_PORT" = "$local_http_port" ] || runtime_settings_changed=true
+    b64_text_matches "$ST_LOCAL_HTTP_USER_B64" "$local_http_user" || runtime_settings_changed=true
+    b64_text_matches "$ST_LOCAL_HTTP_PASS_B64" "$local_http_pass" || runtime_settings_changed=true
     [ "$ST_MIHOMO_IPV6" = "$mihomo_ipv6" ] || runtime_settings_changed=true
     [ "$ST_MIHOMO_STORE_SELECTED" = "$mihomo_store_selected" ] || runtime_settings_changed=true
     [ "$ST_MIHOMO_STORE_FAKE_IP" = "$mihomo_store_fake_ip" ] || runtime_settings_changed=true

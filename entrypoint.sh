@@ -353,6 +353,9 @@ load_state() {
   MIHOMO_FIND_PROCESS_MODE=off MIHOMO_LOG_LEVEL=warning MIHOMO_IPV6=0
   MIHOMO_STORE_SELECTED=1 MIHOMO_STORE_FAKE_IP=0
   MIHOMO_MODE=source GLOBAL_OVERRIDE_B64=
+  INBOUND_STRIP_SOCKS=1 INBOUND_STRIP_HTTP=1 INBOUND_STRIP_MIXED=1
+  LOCAL_SOCKS_ENABLED=0 LOCAL_SOCKS_PORT=1080 LOCAL_SOCKS_USER_B64= LOCAL_SOCKS_PASS_B64=
+  LOCAL_HTTP_ENABLED=0 LOCAL_HTTP_PORT=1081 LOCAL_HTTP_USER_B64= LOCAL_HTTP_PASS_B64=
   MIHOMO_SNIFFER_MODE=source MIHOMO_SNIFFER_OVERRIDE=0 MIHOMO_SNIFFER_ENABLE=0
   MIHOMO_SNIFFER_FORCE_DNS_MAPPING=0 MIHOMO_SNIFFER_PARSE_PURE_IP=0 MIHOMO_SNIFFER_OVERRIDE_DESTINATION=0
   MIHOMO_SNIFFER_QUIC_PORTS_B64= MIHOMO_SNIFFER_TLS_PORTS_B64= MIHOMO_SNIFFER_HTTP_PORTS_B64=ODAKODA4MC04ODgw
@@ -373,7 +376,7 @@ load_state() {
     key=${line%%=*}
     value=${line#*=}
     case "$key" in
-      ACTIVE_PROFILE_ID|RUN_ENABLED|GLOBAL_HEADERS_B64|GLOBAL_OVERRIDE_B64|MIHOMO_MODE|LISTENER_MODE|REDIR_PORT|TPROXY_PORT|MIHOMO_FIND_PROCESS_MODE|MIHOMO_LOG_LEVEL|MIHOMO_IPV6|MIHOMO_STORE_SELECTED|MIHOMO_STORE_FAKE_IP|MIHOMO_SNIFFER_MODE|MIHOMO_SNIFFER_OVERRIDE|MIHOMO_SNIFFER_ENABLE|MIHOMO_SNIFFER_FORCE_DNS_MAPPING|MIHOMO_SNIFFER_PARSE_PURE_IP|MIHOMO_SNIFFER_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_QUIC_PORTS_B64|MIHOMO_SNIFFER_TLS_PORTS_B64|MIHOMO_SNIFFER_HTTP_PORTS_B64|MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_FORCE_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64|MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64|EXTERNAL_UI_PRESET|EXTERNAL_UI_URL_B64|EXTERNAL_UI_SECRET_B64|NETWORK_DISABLE_IPV6|NETWORK_QDISC|NETWORK_DISABLE_MULTICAST|NETWORK_CT_ESTABLISHED|NETWORK_CT_SYN_SENT|NETWORK_CT_SYN_RECV|NETWORK_CT_FIN_WAIT|NETWORK_CT_CLOSE_WAIT|NETWORK_CT_LAST_ACK|NETWORK_CT_TIME_WAIT|NETWORK_CT_CLOSE|NETWORK_CT_UNACKNOWLEDGED|NETWORK_CT_UDP_STREAM)
+      ACTIVE_PROFILE_ID|RUN_ENABLED|GLOBAL_HEADERS_B64|GLOBAL_OVERRIDE_B64|MIHOMO_MODE|LISTENER_MODE|REDIR_PORT|TPROXY_PORT|MIHOMO_FIND_PROCESS_MODE|MIHOMO_LOG_LEVEL|MIHOMO_IPV6|MIHOMO_STORE_SELECTED|MIHOMO_STORE_FAKE_IP|MIHOMO_SNIFFER_MODE|MIHOMO_SNIFFER_OVERRIDE|MIHOMO_SNIFFER_ENABLE|MIHOMO_SNIFFER_FORCE_DNS_MAPPING|MIHOMO_SNIFFER_PARSE_PURE_IP|MIHOMO_SNIFFER_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_QUIC_PORTS_B64|MIHOMO_SNIFFER_TLS_PORTS_B64|MIHOMO_SNIFFER_HTTP_PORTS_B64|MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_FORCE_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64|MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64|EXTERNAL_UI_PRESET|EXTERNAL_UI_URL_B64|EXTERNAL_UI_SECRET_B64|NETWORK_DISABLE_IPV6|NETWORK_QDISC|NETWORK_DISABLE_MULTICAST|NETWORK_CT_ESTABLISHED|NETWORK_CT_SYN_SENT|NETWORK_CT_SYN_RECV|NETWORK_CT_FIN_WAIT|NETWORK_CT_CLOSE_WAIT|NETWORK_CT_LAST_ACK|NETWORK_CT_TIME_WAIT|NETWORK_CT_CLOSE|NETWORK_CT_UNACKNOWLEDGED|NETWORK_CT_UDP_STREAM|INBOUND_STRIP_SOCKS|INBOUND_STRIP_HTTP|INBOUND_STRIP_MIXED|LOCAL_SOCKS_ENABLED|LOCAL_SOCKS_PORT|LOCAL_SOCKS_USER_B64|LOCAL_SOCKS_PASS_B64|LOCAL_HTTP_ENABLED|LOCAL_HTTP_PORT|LOCAL_HTTP_USER_B64|LOCAL_HTTP_PASS_B64)
         export "$key=$value"
         ;;
     esac
@@ -385,6 +388,20 @@ load_state() {
   case "$MIHOMO_FIND_PROCESS_MODE" in off|strict|always) ;; *) MIHOMO_FIND_PROCESS_MODE=off ;; esac
   case "$MIHOMO_LOG_LEVEL" in silent|error|warning|info|debug) ;; *) MIHOMO_LOG_LEVEL=warning ;; esac
   case "$MIHOMO_MODE" in source|rule|global|direct) ;; *) MIHOMO_MODE=source ;; esac
+  # Вырезание входов из подписки включено по умолчанию: контейнер — шлюз, а
+  # не персональный прокси, и лишний слушающий порт в LAN тут не нужен.
+  case "$INBOUND_STRIP_SOCKS" in 0) ;; *) INBOUND_STRIP_SOCKS=1 ;; esac
+  case "$INBOUND_STRIP_HTTP" in 0) ;; *) INBOUND_STRIP_HTTP=1 ;; esac
+  case "$INBOUND_STRIP_MIXED" in 0) ;; *) INBOUND_STRIP_MIXED=1 ;; esac
+  case "$LOCAL_SOCKS_ENABLED" in 1) ;; *) LOCAL_SOCKS_ENABLED=0 ;; esac
+  case "$LOCAL_HTTP_ENABLED" in 1) ;; *) LOCAL_HTTP_ENABLED=0 ;; esac
+  valid_number "$LOCAL_SOCKS_PORT" && [ "$LOCAL_SOCKS_PORT" -ge 1 ] && [ "$LOCAL_SOCKS_PORT" -le 65535 ] || LOCAL_SOCKS_PORT=1080
+  valid_number "$LOCAL_HTTP_PORT" && [ "$LOCAL_HTTP_PORT" -ge 1 ] && [ "$LOCAL_HTTP_PORT" -le 65535 ] || LOCAL_HTTP_PORT=1081
+  # Два входа на одном порту ядро не поднимет, поэтому спорную пару гасим
+  # целиком, а не молча оставляем один из них.
+  if [ "$LOCAL_SOCKS_ENABLED" = 1 ] && [ "$LOCAL_HTTP_ENABLED" = 1 ] && [ "$LOCAL_SOCKS_PORT" = "$LOCAL_HTTP_PORT" ]; then
+    LOCAL_SOCKS_ENABLED=0 LOCAL_HTTP_ENABLED=0
+  fi
   case "$MIHOMO_IPV6:$MIHOMO_STORE_SELECTED:$MIHOMO_STORE_FAKE_IP" in [01]:[01]:[01]) ;; *) MIHOMO_IPV6=0 MIHOMO_STORE_SELECTED=1 MIHOMO_STORE_FAKE_IP=0 ;; esac
   case "$MIHOMO_SNIFFER_OVERRIDE:$MIHOMO_SNIFFER_ENABLE:$MIHOMO_SNIFFER_FORCE_DNS_MAPPING:$MIHOMO_SNIFFER_PARSE_PURE_IP:$MIHOMO_SNIFFER_OVERRIDE_DESTINATION:$MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION" in
     [01]:[01]:[01]:[01]:[01]:[01]) ;;
@@ -1124,7 +1141,10 @@ EOF
 
 extract_preserved_listeners() {
   listeners_input="$1"
-  awk '
+  # Флаги вырезания приходят в awk отдельно: типы socks, http и mixed —
+  # это то же самое, что top-level socks-port, port и mixed-port, только
+  # записанное в listeners, и выключать их надо в обоих местах сразу.
+  awk -v strip_socks="$INBOUND_STRIP_SOCKS" -v strip_http="$INBOUND_STRIP_HTTP" -v strip_mixed="$INBOUND_STRIP_MIXED" '
     function is_top(line) { return line ~ /^[^[:space:]#][^:]*:/ }
     function indent(line, copy) {
       copy = line
@@ -1156,10 +1176,17 @@ extract_preserved_listeners() {
       }
       return ""
     }
+    function dropped(type) {
+      if (type == "redir" || type == "tproxy" || type == "tun") return 1
+      if (type == "socks" && strip_socks == 1) return 1
+      if (type == "http" && strip_http == 1) return 1
+      if (type == "mixed" && strip_mixed == 1) return 1
+      return 0
+    }
     function flush(type) {
       if (!have_item) return
       type = item_type
-      if (type != "redir" && type != "tproxy" && type != "tun") printf "%s", item
+      if (!dropped(type)) printf "%s", item
       item = ""
       item_type = ""
       have_item = 0
@@ -1189,6 +1216,34 @@ extract_preserved_listeners() {
     }
     END { flush() }
   ' "$listeners_input"
+}
+
+# Свой SOCKS/HTTP-вход. Пустой список users выключает авторизацию явно:
+# без него вход унаследовал бы глобальный authentication из подписки, и
+# «без пароля» в панели означало бы не то, что написано.
+write_local_inbound() {
+  local_kind="$1" local_port="$2" local_user="$3" local_pass="$4"
+  printf '  - name: remnasub-%s
+' "$local_kind"
+  printf '    type: %s
+' "$local_kind"
+  printf '    port: %s
+' "$local_port"
+  printf '    listen: 0.0.0.0
+'
+  [ "$local_kind" != socks ] || printf '    udp: true
+'
+  if [ -n "$local_user" ]; then
+    printf '    users:
+'
+    printf '      - username: %s
+' "$(yaml_single_quote "$local_user")"
+    printf '        password: %s
+' "$(yaml_single_quote "$local_pass")"
+  else
+    printf '    users: []
+'
+  fi
 }
 
 write_listeners_overlay() {
@@ -1240,6 +1295,14 @@ EOF
 EOF
       ;;
   esac
+  if [ "$LOCAL_SOCKS_ENABLED" = 1 ]; then
+    write_local_inbound socks "$LOCAL_SOCKS_PORT" \
+      "$(b64_decode_file "$LOCAL_SOCKS_USER_B64")" "$(b64_decode_file "$LOCAL_SOCKS_PASS_B64")"
+  fi
+  if [ "$LOCAL_HTTP_ENABLED" = 1 ]; then
+    write_local_inbound http "$LOCAL_HTTP_PORT" \
+      "$(b64_decode_file "$LOCAL_HTTP_USER_B64")" "$(b64_decode_file "$LOCAL_HTTP_PASS_B64")"
+  fi
 }
 
 yaml_boolean() {
@@ -1544,10 +1607,14 @@ build_final_config() {
     return 1
   fi
   replace_top_level_block "$managed_config" "$listeners_config" listeners "$overlay"
-  remove_top_level_keys "$listeners_config" "$controller_base" \
-    redir-port \
-    tproxy-port \
-    tun \
+  # Входы живут в конфиге дважды: верхнеуровневыми ключами и записями в
+  # listeners. Вырезать надо оба места, иначе выключённый в панели SOCKS
+  # всё равно поднимется из socks-port.
+  set -- redir-port tproxy-port tun
+  [ "$INBOUND_STRIP_SOCKS" = 1 ] && set -- "$@" socks-port
+  [ "$INBOUND_STRIP_HTTP" = 1 ] && set -- "$@" port
+  [ "$INBOUND_STRIP_MIXED" = 1 ] && set -- "$@" mixed-port
+  remove_top_level_keys "$listeners_config" "$controller_base" "$@" \
     external-controller \
     external-controller-tls \
     external-controller-unix \

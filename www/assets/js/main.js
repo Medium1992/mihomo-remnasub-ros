@@ -32,6 +32,10 @@ function bootstrap() {
   all("[data-page-link]").forEach((button) => button.addEventListener("click", () => showPage(button.dataset.pageLink)));
   all("[data-settings-tab]").forEach((button) => button.addEventListener("click", () => selectSettingsTab(button.dataset.settingsTab)));
   all('input[name="listener-mode"]').forEach((input) => input.addEventListener("change", settings.updateListenerPortFields));
+  ["local-socks-enabled", "local-http-enabled"].forEach((id) => $(id).addEventListener("change", () => {
+    settings.updateLocalInboundState();
+    ui.settingsDirty = true;
+  }));
 
   $("external-ui-preset").addEventListener("change", () => {
     settings.updateExternalUIPreset();

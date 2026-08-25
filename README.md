@@ -209,6 +209,16 @@ An empty field means the subscription is treated as unencrypted. If the server s
 | REDIR + TPROXY | TCP through REDIR and UDP through TPROXY; requires nftables. |
 | TPROXY | TCP and UDP through TPROXY; requires nftables. |
 
+### Subscription inbounds and local proxies
+
+Remnawave ships its own inbounds in the configuration -- usually `mixed-port: 7890`, `socks-port: 7891` and `port`. The container works as a gateway and has no use for an extra listening port on the LAN, so **they are stripped by default**. Each type has its own switch if you do want it.
+
+Stripping happens **at both levels at once**: the top-level `socks-port`, `port` and `mixed-port` keys, and the `type: socks`, `type: http` and `type: mixed` entries under `listeners`. One place is not enough -- a SOCKS inbound disabled in the panel would otherwise come back from the other.
+
+A local SOCKS5 and HTTP proxy are enabled in the same place, independently of each other and **off by default**. Each has its own port and optional username and password. An empty username means no authentication, and the inbound is then open to everyone on the network, since it listens on every interface. An empty `users` list is written explicitly so the inbound does not inherit `authentication` from the subscription and "no password" in the panel means exactly that.
+
+Ports are checked before saving: they must differ from each other and from the REDIR and TPROXY ports, or the core refuses to bring up the second listener.
+
 The default ports are `12345` for REDIR and `12346` for TPROXY. Start creates only the selected mode's rules; stop removes only rules and routes owned by this container.
 
 ## 🌐 Alpine Network
