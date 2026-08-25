@@ -475,6 +475,11 @@ effective_global_headers() {
       line = $0
       sub(/\r$/, "", line)
       if (line ~ /^[[:space:]]*$/) next
+      # Строка, начинающаяся с решётки, выключена пользователем: значение
+      # хранится вместе с остальными, чтобы вернуть его галочкой, но в
+      # запрос она не попадает.
+      off = 0
+      if (sub(/^[[:space:]]*#/, "", line)) off = 1
       separator = index(line, ":")
       if (separator < 2) next
       key = substr(line, 1, separator - 1)
@@ -485,13 +490,17 @@ effective_global_headers() {
       if (normalized in fallback) {
         supplied[normalized] = value
         seen[normalized] = 1
-      } else {
+        disabled[normalized] = off
+      } else if (key ~ /^[A-Za-z0-9-]+$/ && !off) {
         custom[++custom_count] = key ": " value
       }
     }
     END {
       for (i = 1; i <= count; i++) {
         key = order[i]
+        # Снятая галочка убирает обязательный заголовок совсем: иначе он
+        # ушёл бы со значением по умолчанию и выключить его было бы нельзя.
+        if (disabled[key]) continue
         value = seen[key] && supplied[key] != "" ? supplied[key] : fallback[key]
         if (key == "user-agent" && value == "Mihomo-RemnaSub-RoS/1") value = fallback[key]
         print key ": " value

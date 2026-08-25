@@ -45,9 +45,11 @@ valid_header_block() {
     {
       sub(/\r$/, "")
       if ($0 ~ /^[[:space:]]*$/) next
-      separator = index($0, ":")
+      raw = $0
+      sub(/^[[:space:]]*#/, "", raw)
+      separator = index(raw, ":")
       if (separator < 2) exit 1
-      key = trim(substr($0, 1, separator - 1))
+      key = trim(substr(raw, 1, separator - 1))
       if (key !~ /^[A-Za-z0-9-]+$/) exit 1
       key = tolower(key)
       if (seen[key]++) exit 1

@@ -127,7 +127,9 @@ The resulting configuration and the container log are available straight from th
 | `x-device-model` | `MikroTik RB5009UG+S+IN` |
 | `user-agent` | `clash.meta/<mihomo version>` |
 
-These five keys are always sent, but their values are editable. Any custom header may be added. Header names are matched case-insensitively. When local overrides are enabled, profile headers replace same-name global headers and extend the rest.
+The value of each of these five keys can be changed, and the header itself can be switched off with the checkbox on the left. A disabled header is not sent at all -- for a required key that also means no default is substituted in its place. The value is kept so a single click brings it back; in the settings such a line is stored with a leading `#`.
+
+Custom headers can be added and switched off the same way. Names are compared case-insensitively.
 
 ### Recognized response headers
 
