@@ -169,6 +169,17 @@ export function updateSnifferOverrideState(openOnEnable = false) {
     : $("mihomo-sniffer-enable").checked ? "Sniffer включён" : "Sniffer принудительно выключен";
 }
 
+
+// Параметры своего входа не прячем, а гасим: так видно, что порт и логин
+// сохранены, даже когда сам вход выключен.
+export function updateLocalInboundState() {
+  [["local-socks-enabled", "local-socks-body"], ["local-http-enabled", "local-http-body"]].forEach(([toggleId, bodyId]) => {
+    const enabled = $(toggleId).checked;
+    $(bodyId).classList.toggle("disabled", !enabled);
+    all("input, button", $(bodyId)).forEach((control) => { control.disabled = !enabled; });
+  });
+}
+
 export function updateListenerPortFields() {
   const selected = document.querySelector('input[name="listener-mode"]:checked');
   const mode = selected ? selected.value : "auto";
@@ -280,6 +291,18 @@ export function renderSettings(force = false) {
   if (!nft && ["redir-tproxy", "tproxy"].includes(mode)) mode = "redir-tun";
   all('input[name="listener-mode"]').forEach((input) => { input.checked = input.value === mode; });
   $("redir-port").value = state.redir_port || 12345;
+  $("inbound-strip-socks").checked = Number(state.inbound_strip_socks ?? 1) !== 0;
+  $("inbound-strip-http").checked = Number(state.inbound_strip_http ?? 1) !== 0;
+  $("inbound-strip-mixed").checked = Number(state.inbound_strip_mixed ?? 1) !== 0;
+  $("local-socks-enabled").checked = Number(state.local_socks_enabled ?? 0) !== 0;
+  $("local-socks-port").value = state.local_socks_port || 1080;
+  $("local-socks-user").value = decode(state.local_socks_user_b64);
+  $("local-socks-pass").value = decode(state.local_socks_pass_b64);
+  $("local-http-enabled").checked = Number(state.local_http_enabled ?? 0) !== 0;
+  $("local-http-port").value = state.local_http_port || 1081;
+  $("local-http-user").value = decode(state.local_http_user_b64);
+  $("local-http-pass").value = decode(state.local_http_pass_b64);
+  updateLocalInboundState();
   $("tproxy-port").value = state.tproxy_port || 12346;
   all('input[name="listener-mode"]').forEach((input) => { input.disabled = !nft && ["redir-tproxy", "tproxy"].includes(input.value); });
   updateListenerPortFields();
@@ -352,6 +375,17 @@ export async function saveSettings() {
     listener_mode: mode,
     redir_port: redirPort,
     tproxy_port: tproxyPort,
+    inbound_strip_socks: $("inbound-strip-socks").checked ? "1" : "0",
+    inbound_strip_http: $("inbound-strip-http").checked ? "1" : "0",
+    inbound_strip_mixed: $("inbound-strip-mixed").checked ? "1" : "0",
+    local_socks_enabled: $("local-socks-enabled").checked ? "1" : "0",
+    local_socks_port: $("local-socks-port").value,
+    local_socks_user: $("local-socks-user").value.trim(),
+    local_socks_pass: $("local-socks-pass").value,
+    local_http_enabled: $("local-http-enabled").checked ? "1" : "0",
+    local_http_port: $("local-http-port").value,
+    local_http_user: $("local-http-user").value.trim(),
+    local_http_pass: $("local-http-pass").value,
     external_ui_preset: $("external-ui-preset").value,
     external_ui_url: $("external-ui-url").dataset.customUrl || "",
     external_ui_secret: $("external-ui-secret").value,

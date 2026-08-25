@@ -112,6 +112,35 @@
                 </div>
               </div>
               <p class="settings-note" id="listener-mode-note"></p>
+
+              <div class="settings-title override-subtitle"><h2>Входы из подписки</h2><p>Панель присылает свои SOCKS, HTTP и mixed. По умолчанию они вырезаются: контейнер работает шлюзом, и лишний слушающий порт в LAN не нужен</p></div>
+              <div class="settings-grid">
+                <label class="setting-row switch-row"><span><b>Вырезать SOCKS</b><small>Ключ <code>socks-port</code> и записи <code>type: socks</code> в listeners</small></span><input id="inbound-strip-socks" type="checkbox"><i></i></label>
+                <label class="setting-row switch-row"><span><b>Вырезать HTTP</b><small>Ключ <code>port</code> и записи <code>type: http</code></small></span><input id="inbound-strip-http" type="checkbox"><i></i></label>
+                <label class="setting-row switch-row"><span><b>Вырезать mixed</b><small>Ключ <code>mixed-port</code> и записи <code>type: mixed</code></small></span><input id="inbound-strip-mixed" type="checkbox"><i></i></label>
+              </div>
+
+              <div class="settings-title override-subtitle"><h2>Свои входы</h2><p>Собственные прокси контейнера, независимые друг от друга. Слушают все интерфейсы, поэтому без логина доступны всей сети</p></div>
+              <div class="settings-grid">
+                <label class="setting-row switch-row"><span><b>SOCKS5</b><small>С поддержкой UDP</small></span><input id="local-socks-enabled" type="checkbox"><i></i></label>
+              </div>
+              <div class="compound-setting local-inbound" id="local-socks-body">
+                <div class="field-grid three">
+                  <label><span>Порт</span><input id="local-socks-port" type="number" min="1" max="65535" value="1080"></label>
+                  <label><span>Логин</span><input id="local-socks-user" type="text" maxlength="128" autocomplete="off" spellcheck="false" placeholder="пусто — без пароля"></label>
+                  <label><span>Пароль</span><span class="password-field"><input id="local-socks-pass" type="password" maxlength="128" autocomplete="new-password"><button class="icon-button" type="button" data-toggle-password="local-socks-pass" title="Показать пароль"><svg><use href="#i-eye"/></svg></button></span></label>
+                </div>
+              </div>
+              <div class="settings-grid">
+                <label class="setting-row switch-row"><span><b>HTTP</b><small>Обычный HTTP-прокси</small></span><input id="local-http-enabled" type="checkbox"><i></i></label>
+              </div>
+              <div class="compound-setting local-inbound" id="local-http-body">
+                <div class="field-grid three">
+                  <label><span>Порт</span><input id="local-http-port" type="number" min="1" max="65535" value="1081"></label>
+                  <label><span>Логин</span><input id="local-http-user" type="text" maxlength="128" autocomplete="off" spellcheck="false" placeholder="пусто — без пароля"></label>
+                  <label><span>Пароль</span><span class="password-field"><input id="local-http-pass" type="password" maxlength="128" autocomplete="new-password"><button class="icon-button" type="button" data-toggle-password="local-http-pass" title="Показать пароль"><svg><use href="#i-eye"/></svg></button></span></label>
+                </div>
+              </div>
             </section>
 
             <section class="settings-section settings-panel" data-settings-panel="network">
