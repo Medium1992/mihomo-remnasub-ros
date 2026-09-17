@@ -302,9 +302,9 @@ Remnawave присылает в конфиге собственные входы
 
 Тег `latest` содержит amd64 v3, arm64, armv7 и armv5; для x86-64 публикуются отдельные `amd64v1`, `amd64v2` и `amd64v4`. Аргументы Dockerfile и особенности архитектур — в [docs/BUILD_RU.md](/docs/BUILD_RU.md).
 
-## 💖 Support the project
+## 💖 Поддержка проекта
 
-If this saved you time configuring MikroTik and its scripts:
+Если проект сэкономил вам время с настройкой микротика и скриптами:
 
 - **USDT (TRC20):** `TWDDYD1nk5JnG6FxvEu2fyFqMCY9PcdEsJ`
 - **USDT (Polygon PoS):** `0xa4f2d9035e8bacf4cdff27904f03ecc5479f7e17`
