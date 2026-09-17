@@ -289,3 +289,11 @@ Mihomo itself may create `cache.db` and geodata files under `/etc/mihomo` when r
 ## 🐳 Build
 
 The `latest` tag carries amd64 v3, arm64, armv7 and armv5; separate `amd64v1`, `amd64v2` and `amd64v4` images are published for x86-64. Dockerfile arguments and per-architecture details live in [docs/BUILD.md](/docs/BUILD.md).
+
+## 💖 Support the project
+
+If this saved you time configuring MikroTik and its scripts:
+
+- **USDT (TRC20):** `TWDDYD1nk5JnG6FxvEu2fyFqMCY9PcdEsJ`
+- **USDT (Polygon PoS):** `0xa4f2d9035e8bacf4cdff27904f03ecc5479f7e17`
+
