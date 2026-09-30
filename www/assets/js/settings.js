@@ -1,12 +1,13 @@
 // Страница настроек контейнера и переход в панель самого Mihomo.
-import { $, all, toast } from "./dom.js";
+import { $, all, toast, confirmDialog } from "./dom.js";
 import { decode } from "./codec.js";
-import { send, requestJson } from "./api.js";
+import { send, request, requestJson } from "./api.js";
 import { renderHeaders, serializedHeaders } from "./headers.js";
 import { load, schedulePoll, onRender } from "./refresh.js";
 import { store, ui } from "./store.js";
 import { THEMES, ACCENT_PRESETS, applyTheme, isTheme, isAccent } from "./theme.js";
 import { OVERRIDE_PRESETS, overrideProblem, insertPreset } from "./presets.js";
+import { runCheck } from "./checks.js";
 
 export const externalUIPresets = {
   "zashboard": "https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip",
@@ -27,6 +28,119 @@ export const networkTimeoutDefaults = {
   "network-ct-unacknowledged": 300,
   "network-ct-udp-stream": 180
 };
+
+// Рекомендуемый TCP-тюнинг: меньше памяти под неотправленные данные, без
+// сброса окна после простоя, поиск MTU при потерях, быстрее уходят FIN_WAIT.
+export const tcpTuningDefaults = {
+  "network-tcp-notsent-lowat": "131072",
+  "network-tcp-slow-start-after-idle": "0",
+  "network-tcp-mtu-probing": "1",
+  "network-tcp-fin-timeout": "30",
+  "network-tcp-congestion": "system",
+  "network-tcp-buffer-max": "system"
+};
+
+const SYSCTL_LABELS = {
+  applied: ["применено", "good"],
+  system: ["значение ядра", ""],
+  readonly: ["только чтение в контейнере", "warning"],
+  missing: ["нет в этом ядре", "warning"],
+  unavailable: ["алгоритм недоступен в ядре", "warning"]
+};
+
+// Значение, которого нет среди готовых вариантов (например, записанное
+// руками), добавляется отдельным пунктом, а не теряется.
+function setSelectValue(select, value, label) {
+  if (![...select.options].some((option) => option.value === value)) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label(value);
+    select.append(option);
+  }
+  select.value = value;
+}
+
+function renderTcpTuning(state, runtime) {
+  const congestion = $("network-tcp-congestion");
+  const available = String(runtime.tcp_congestion_available || "").split(/\s+/).filter(Boolean);
+  const wanted = state.network_tcp_congestion || "system";
+  congestion.replaceChildren(...["system", ...available].map((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value === "system" ? "Системный" : value;
+    return option;
+  }));
+  setSelectValue(congestion, wanted, (value) => `${value} (нет в ядре)`);
+  setSelectValue($("network-tcp-notsent-lowat"), String(state.network_tcp_notsent_lowat || "131072"), (value) => `${Math.round(Number(value) / 1024)} КБ`);
+  $("network-tcp-slow-start-after-idle").value = String(state.network_tcp_slow_start_after_idle ?? "0");
+  $("network-tcp-mtu-probing").value = String(state.network_tcp_mtu_probing ?? "1");
+  setSelectValue($("network-tcp-fin-timeout"), String(state.network_tcp_fin_timeout || "30"), (value) => `${value} с`);
+  $("network-tcp-buffer-max").value = String(state.network_tcp_buffer_max || "system");
+  const sysctl = runtime.sysctl || {};
+  all("[data-sysctl]").forEach((node) => {
+    const states = node.dataset.sysctl.split(",").map((key) => sysctl[key]).filter(Boolean);
+    const worst = states.find((value) => ["readonly", "missing", "unavailable"].includes(value)) || states[0] || "";
+    const [text, kind] = SYSCTL_LABELS[worst] || ["", ""];
+    node.textContent = text;
+    node.className = `sysctl-state ${kind}`;
+  });
+}
+
+// Какие ключи общего YAML сейчас перекроет контейнер — по значениям формы,
+// а не сохранённым: предупреждение меняется вместе с переключателями.
+export function globalOverrideContext() {
+  return {
+    mode: $("mihomo-mode").value !== "source",
+    sniffer: $("mihomo-sniffer-override").checked,
+    stripSocks: $("inbound-strip-socks").checked,
+    stripHttp: $("inbound-strip-http").checked,
+    stripMixed: $("inbound-strip-mixed").checked
+  };
+}
+
+export async function checkGlobalOverride() {
+  const profileId = store.model.state.active_profile_id;
+  if (!profileId) throw new Error("Нет активной подписки, проверять не на чем");
+  await runCheck({ scope: "global", profile_id: profileId, global_override: $("global-override").value },
+    "Проверка общего YAML на активной подписке");
+}
+
+export async function restoreBackup(file) {
+  if (!file) return;
+  if (file.size > 1048576) throw new Error("Файл копии больше 1 МиБ");
+  const text = await file.text();
+  if (!text.startsWith("# RemnaSub RoS backup v1")) throw new Error("Это не файл резервной копии RemnaSub RoS");
+  const accepted = await confirmDialog({
+    title: "Восстановить из копии?",
+    message: "Все текущие подписки и настройки контейнера будут заменены содержимым файла. Подписки скачаются заново.",
+    accept: "Восстановить",
+    danger: true
+  });
+  if (!accepted) return;
+  const result = await requestJson("/cgi-bin/remna-backup", {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=UTF-8" },
+    body: text
+  });
+  ui.settingsDirty = false;
+  await load();
+  renderSettings(true);
+  schedulePoll(250);
+  toast(`Копия восстановлена · подписок: ${result.profiles}`);
+}
+
+export async function downloadBackup() {
+  const result = await request("/cgi-bin/remna-backup");
+  const disposition = result.response.headers.get("Content-Disposition") || "";
+  const name = (/filename="([^"]+)"/.exec(disposition) || [])[1] || "remnasub-backup.txt";
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([result.text], { type: "text/plain" }));
+  link.download = name;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
 
 
 // Выбор применяется к странице сразу (превью), а уезжает в state.conf только
@@ -145,16 +259,17 @@ export function renderPresetButtons(containerId, textareaId) {
 
 // Проверка идёт по мере ввода: те же правила потом применяет CGI, но узнать
 // о них до нажатия «Сохранить» полезнее.
-export function watchOverrideProblems(textareaId, noticeId) {
+export function watchOverrideProblems(textareaId, noticeId, context) {
   const textarea = $(textareaId);
   const notice = $(noticeId);
   const check = () => {
-    const problem = overrideProblem(textarea.value);
+    const problem = overrideProblem(textarea.value, context());
     notice.textContent = problem;
     notice.classList.toggle("hidden", !problem);
   };
   textarea.addEventListener("input", check);
   check();
+  return check;
 }
 
 export function updateSnifferOverrideState(openOnEnable = false) {
@@ -258,6 +373,7 @@ export function renderSettings(force = false) {
   const fingerprint = JSON.stringify({
     state,
     nft: runtime.nft_available,
+    tcp: [runtime.tcp_congestion_available, runtime.sysctl],
     ui: [runtime.external_ui_present, runtime.external_ui_state, runtime.external_ui_message_b64, runtime.external_ui_mtime],
     iface: runtime.active_network_interface_b64,
     cidr: runtime.active_network_cidr_b64
@@ -331,6 +447,7 @@ export function renderSettings(force = false) {
   $("network-ct-close").value = state.network_ct_close || 10;
   $("network-ct-unacknowledged").value = state.network_ct_unacknowledged || 300;
   $("network-ct-udp-stream").value = state.network_ct_udp_stream || 180;
+  renderTcpTuning(state, runtime);
   const uiPreset = state.external_ui_preset || "zashboard-cdn";
   $("external-ui-preset").value = externalUIPresets[uiPreset] || uiPreset === "custom" ? uiPreset : "zashboard-cdn";
   $("external-ui-url").dataset.customUrl = decode(state.external_ui_url_b64);
@@ -338,6 +455,7 @@ export function renderSettings(force = false) {
   updateExternalUIPreset();
   $("external-ui-secret").value = decode(state.external_ui_secret_b64);
   updateSecretWarning();
+  $("global-override").dispatchEvent(new Event("input"));
   pendingTheme = isTheme(state.web_theme) ? state.web_theme : "auto";
   pendingAccent = isAccent(state.web_accent) ? state.web_accent : "";
   applyTheme(pendingTheme, pendingAccent);
@@ -421,7 +539,13 @@ export async function saveSettings() {
     network_ct_time_wait: $("network-ct-time-wait").value,
     network_ct_close: $("network-ct-close").value,
     network_ct_unacknowledged: $("network-ct-unacknowledged").value,
-    network_ct_udp_stream: $("network-ct-udp-stream").value
+    network_ct_udp_stream: $("network-ct-udp-stream").value,
+    network_tcp_notsent_lowat: $("network-tcp-notsent-lowat").value,
+    network_tcp_slow_start_after_idle: $("network-tcp-slow-start-after-idle").value,
+    network_tcp_mtu_probing: $("network-tcp-mtu-probing").value,
+    network_tcp_fin_timeout: $("network-tcp-fin-timeout").value,
+    network_tcp_congestion: $("network-tcp-congestion").value,
+    network_tcp_buffer_max: $("network-tcp-buffer-max").value
   });
   ui.settingsDirty = false;
   await load();

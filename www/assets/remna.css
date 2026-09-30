@@ -652,3 +652,74 @@ input::placeholder, textarea::placeholder { color: var(--placeholder); opacity: 
 /* Блок параметров своего входа гаснет, пока сам вход выключен. */
 .local-inbound { margin-top: -2px; transition: opacity .15s ease; }
 .local-inbound.disabled { opacity: .45; }
+
+/* ── Несохранённые правки, состояние ядра, трафик подписки ── */
+#save-settings.dirty { position: relative; }
+#save-settings.dirty::after { content: ""; position: absolute; top: -3px; right: -3px; width: 10px; height: 10px; border: 2px solid var(--base-200); border-radius: 50%; background-color: var(--warning); }
+.sidebar-core i.error { background-color: var(--error); box-shadow: 0 0 0 4px rgba(var(--error-rgb), .14); }
+.subscription-meta { flex-wrap: wrap; row-gap: 5px; }
+.usage-traffic progress { width: 54px; height: 4px; margin-left: 3px; overflow: hidden; border: 0; border-radius: 2px; background-color: rgba(var(--overlay-rgb), .1); appearance: none; }
+.usage-traffic progress::-webkit-progress-bar { background-color: rgba(var(--overlay-rgb), .1); }
+.usage-traffic progress::-webkit-progress-value { background-color: var(--primary); }
+.usage-traffic progress::-moz-progress-bar { background-color: var(--primary); }
+.subscription-meta .warning { color: var(--warning); }
+.subscription-meta .error { color: var(--error); }
+.usage-traffic.warning progress::-webkit-progress-value { background-color: var(--warning); }
+.usage-traffic.warning progress::-moz-progress-bar { background-color: var(--warning); }
+.usage-traffic.error progress::-webkit-progress-value { background-color: var(--error); }
+.usage-traffic.error progress::-moz-progress-bar { background-color: var(--error); }
+.danger-icon.neutral { color: var(--primary); background-color: rgba(var(--primary-rgb), .12); }
+.field-hint { color: var(--faint); font-size: 10px; line-height: 1.35; }
+.field-hint:empty { display: none; }
+
+/* ── Вкладки и панели просмотрщиков ─────────────────────────── */
+.yaml-modal-body.with-tabs { display: flex; flex-direction: column; gap: 10px; }
+.yaml-modal-body.with-tabs > .config-viewer { flex: 1 1 0; min-height: 0; }
+.viewer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.viewer-tabs { display: inline-flex; gap: 3px; padding: 3px; border-radius: 10px; background-color: var(--base-300); }
+.viewer-tabs button { min-height: 30px; padding: 0 12px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; font-size: 12px; font-weight: 650; }
+.viewer-tabs button.active { color: var(--primary-content); background-color: var(--primary); }
+#runtime-yaml-wrap[aria-pressed="true"] { color: var(--primary); background-color: rgba(var(--primary-rgb), .12); }
+.config-viewer.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.runtime-changes { overflow: auto; }
+.section-diff { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.section-diff li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 10px; border-radius: 8px; background-color: rgba(var(--overlay-rgb), .035); }
+.section-diff code { color: var(--yaml-key); font: 12px/1.4 ui-monospace, Consolas, monospace; }
+.section-diff span { font-size: 11px; font-weight: 650; }
+.section-diff .added span { color: var(--success); }
+.section-diff .changed span { color: var(--warning); }
+.section-diff .removed span { color: var(--error); }
+.section-diff-empty { margin: 10px 2px 0; color: var(--muted); font-size: 11px; }
+
+/* ── Проверка без сохранения ─────────────────────────────────── */
+.check-state { display: flex; align-items: center; gap: 9px; padding: 10px 12px; border-radius: 10px; background-color: rgba(var(--overlay-rgb), .04); }
+.check-state i { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; background-color: var(--faint); }
+.check-state b { color: var(--strong); font-size: 12px; overflow-wrap: anywhere; }
+.check-state.pending i { background-color: var(--warning); animation: check-pulse 1s ease-in-out infinite alternate; }
+.check-state.ok { background-color: rgba(var(--success-rgb), .1); }
+.check-state.ok i { background-color: var(--success); }
+.check-state.error { background-color: rgba(var(--error-rgb), .1); }
+.check-state.error i { background-color: var(--error); }
+@keyframes check-pulse { to { opacity: .35; } }
+.override-check { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 2px; }
+.override-check > span { color: var(--faint); font-size: 10px; line-height: 1.45; }
+.override-check code { color: var(--callout-code); font: 10px/1.4 ui-monospace, Consolas, monospace; }
+.override-check .secondary-button { flex: 0 0 auto; }
+.profile-local-body .override-check { padding: 0 14px 14px; }
+
+/* ── TCP-тюнинг ──────────────────────────────────────────────── */
+.tcp-title { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; }
+.tcp-title .secondary-button { flex: 0 0 auto; }
+.settings-note code, .setting-row small code { font: 10px/1.4 ui-monospace, Consolas, monospace; }
+.sysctl-state { justify-self: start; padding: 1px 7px; border-radius: 7px; color: var(--muted); background-color: rgba(var(--overlay-rgb), .05); font-size: 9px; font-style: normal; font-weight: 700; }
+.sysctl-state:empty { display: none; }
+.sysctl-state.good { color: var(--success); background-color: rgba(var(--success-rgb), .1); }
+.sysctl-state.warning { color: var(--warning); background-color: rgba(var(--warning-rgb), .1); }
+
+@media (max-width: 620px) {
+  .tcp-title, .override-check { align-items: flex-start; flex-direction: column; }
+  .usage-traffic progress { display: none; }
+}
+.field-grid label:not(.inline-switch) { align-content: start; }
+#profile-refresh:disabled { opacity: .55; cursor: not-allowed; }
+.tcp-title .secondary-button { min-height: 32px; font-size: 12px; }

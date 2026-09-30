@@ -15,6 +15,12 @@ META=
 ERROR_FILE=
 RUNTIME_DIR=/dev/shm/remnasub
 NETWORK_SIGNATURE_FILE="$RUNTIME_DIR/network.signature"
+NETWORK_INFO_FILE="$RUNTIME_DIR/network.info"
+NETWORK_SYSCTL_ORIGINAL_FILE="$RUNTIME_DIR/sysctl.original"
+CHECKS_DIR="$RUNTIME_DIR/checks"
+CORE_LOG="$RUNTIME_DIR/core.log"
+CORE_FIFO="$RUNTIME_DIR/core.fifo"
+CORE_STATUS="$RUNTIME_DIR/core.status"
 JOBS_DIR="$RUNTIME_DIR/jobs"
 STATUS_DIR="$RUNTIME_DIR/status"
 ERRORS_DIR="$RUNTIME_DIR/errors"
@@ -32,7 +38,7 @@ BASIC_AUTH="${BASIC_AUTH:-on}"
 BASIC_AUTH_USER="${BASIC_AUTH_USER:-admin}"
 BASIC_AUTH_HASH="${BASIC_AUTH_HASH:-$BASIC_AUTH_HASH_DEFAULT}"
 
-mkdir -p "$APP_DIR" "$PROFILES_DIR" "$RUNTIME_DIR" "$JOBS_DIR" "$STATUS_DIR" "$ERRORS_DIR"
+mkdir -p "$APP_DIR" "$PROFILES_DIR" "$RUNTIME_DIR" "$JOBS_DIR" "$STATUS_DIR" "$ERRORS_DIR" "$CHECKS_DIR"
 
 PERSIST_CHANGED=0
 persist_file_if_changed() {
@@ -67,6 +73,17 @@ rm -f \
 
 valid_number() { case "${1:-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
+# Значение ключа из KEY=VALUE-файла в CONF_VALUE. Только встроенный read:
+# фоновые циклы читают так статусы и метаданные каждые несколько секунд.
+conf_get() {
+  CONF_VALUE=
+  [ -f "$1" ] || return 1
+  while IFS= read -r conf_line || [ -n "$conf_line" ]; do
+    case "$conf_line" in "$2="*) CONF_VALUE=${conf_line#*=}; return 0 ;; esac
+  done < "$1"
+  return 1
+}
+
 valid_profile_id() {
   case "${1:-}" in
     p-*) ;;
@@ -88,6 +105,8 @@ set_profile_context() {
   META="$PROFILES_DIR/$context_profile_id.source.meta"
   ERROR_FILE="$ERRORS_DIR/$context_profile_id.txt"
   FINAL="$RUNTIME_DIR/$context_profile_id.config.yaml"
+  FINAL_PREVIOUS="$RUNTIME_DIR/$context_profile_id.config.previous.yaml"
+  FINAL_FAILED="$RUNTIME_DIR/$context_profile_id.config.failed.yaml"
 }
 
 event_log() {
@@ -253,6 +272,7 @@ move_profile_bundle() {
   done
   [ ! -e "$ERRORS_DIR/$old_profile_id.txt" ] || mv "$ERRORS_DIR/$old_profile_id.txt" "$ERRORS_DIR/$new_profile_id_value.txt"
   [ ! -e "$RUNTIME_DIR/$old_profile_id.config.yaml" ] || mv "$RUNTIME_DIR/$old_profile_id.config.yaml" "$RUNTIME_DIR/$new_profile_id_value.config.yaml"
+  [ ! -e "$RUNTIME_DIR/$old_profile_id.config.previous.yaml" ] || mv "$RUNTIME_DIR/$old_profile_id.config.previous.yaml" "$RUNTIME_DIR/$new_profile_id_value.config.previous.yaml"
   ensure_profile_name "$PROFILES_DIR/$new_profile_id_value.conf"
 }
 
@@ -319,6 +339,12 @@ NETWORK_CT_TIME_WAIT=10
 NETWORK_CT_CLOSE=10
 NETWORK_CT_UNACKNOWLEDGED=300
 NETWORK_CT_UDP_STREAM=180
+NETWORK_TCP_NOTSENT_LOWAT=131072
+NETWORK_TCP_SLOW_START_AFTER_IDLE=0
+NETWORK_TCP_MTU_PROBING=1
+NETWORK_TCP_FIN_TIMEOUT=30
+NETWORK_TCP_CONGESTION=system
+NETWORK_TCP_BUFFER_MAX=system
 EOF
   chmod 600 "$STATE" 2>/dev/null || true
 }
@@ -344,8 +370,27 @@ initialize_storage() {
 
 initialize_storage
 
+# TCP-тюнинг: system значит «не трогать», то есть вернуть значение ядра,
+# с которым стартовал контейнер. Проверки те же, что в CGI.
+normalize_tcp_tuning() {
+  case "$NETWORK_TCP_NOTSENT_LOWAT" in
+    system) ;;
+    *) valid_number "$NETWORK_TCP_NOTSENT_LOWAT" && [ "$NETWORK_TCP_NOTSENT_LOWAT" -ge 4096 ] && [ "$NETWORK_TCP_NOTSENT_LOWAT" -le 67108864 ] || NETWORK_TCP_NOTSENT_LOWAT=131072 ;;
+  esac
+  case "$NETWORK_TCP_SLOW_START_AFTER_IDLE" in system|0|1) ;; *) NETWORK_TCP_SLOW_START_AFTER_IDLE=0 ;; esac
+  case "$NETWORK_TCP_MTU_PROBING" in system|0|1|2) ;; *) NETWORK_TCP_MTU_PROBING=1 ;; esac
+  case "$NETWORK_TCP_FIN_TIMEOUT" in
+    system) ;;
+    *) valid_number "$NETWORK_TCP_FIN_TIMEOUT" && [ "$NETWORK_TCP_FIN_TIMEOUT" -ge 5 ] && [ "$NETWORK_TCP_FIN_TIMEOUT" -le 120 ] || NETWORK_TCP_FIN_TIMEOUT=30 ;;
+  esac
+  case "$NETWORK_TCP_CONGESTION" in ''|*[!a-z0-9_]*) NETWORK_TCP_CONGESTION=system ;; esac
+  case "$NETWORK_TCP_BUFFER_MAX" in system|1048576|2097152|4194304|8388608|16777216) ;; *) NETWORK_TCP_BUFFER_MAX=system ;; esac
+}
+
+# Фоновые циклы зовут load_state каждые пару секунд, поэтому здесь нет ни
+# одного форка: только встроенный read и подстановки.
 load_state() {
-  ACTIVE_PROFILE_ID=$(first_profile_id 2>/dev/null || true)
+  ACTIVE_PROFILE_ID=
   RUN_ENABLED=0
   GLOBAL_HEADERS_B64=
   LISTENER_MODE=auto
@@ -367,6 +412,8 @@ load_state() {
   NETWORK_CT_FIN_WAIT=10 NETWORK_CT_CLOSE_WAIT=10 NETWORK_CT_LAST_ACK=10
   NETWORK_CT_TIME_WAIT=10 NETWORK_CT_CLOSE=10 NETWORK_CT_UNACKNOWLEDGED=300
   NETWORK_CT_UDP_STREAM=180
+  NETWORK_TCP_NOTSENT_LOWAT=131072 NETWORK_TCP_SLOW_START_AFTER_IDLE=0 NETWORK_TCP_MTU_PROBING=1
+  NETWORK_TCP_FIN_TIMEOUT=30 NETWORK_TCP_CONGESTION=system NETWORK_TCP_BUFFER_MAX=system
   # Строка режется вручную, а не через IFS='=': read с таким IFS съедает
   # одиночный '=' в конце значения, а это padding base64 (он появляется,
   # когда длина исходной строки даёт остаток 2 при делении на 3). Потеря
@@ -376,7 +423,7 @@ load_state() {
     key=${line%%=*}
     value=${line#*=}
     case "$key" in
-      ACTIVE_PROFILE_ID|RUN_ENABLED|GLOBAL_HEADERS_B64|GLOBAL_OVERRIDE_B64|MIHOMO_MODE|LISTENER_MODE|REDIR_PORT|TPROXY_PORT|MIHOMO_FIND_PROCESS_MODE|MIHOMO_LOG_LEVEL|MIHOMO_IPV6|MIHOMO_STORE_SELECTED|MIHOMO_STORE_FAKE_IP|MIHOMO_SNIFFER_MODE|MIHOMO_SNIFFER_OVERRIDE|MIHOMO_SNIFFER_ENABLE|MIHOMO_SNIFFER_FORCE_DNS_MAPPING|MIHOMO_SNIFFER_PARSE_PURE_IP|MIHOMO_SNIFFER_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_QUIC_PORTS_B64|MIHOMO_SNIFFER_TLS_PORTS_B64|MIHOMO_SNIFFER_HTTP_PORTS_B64|MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_FORCE_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64|MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64|EXTERNAL_UI_PRESET|EXTERNAL_UI_URL_B64|EXTERNAL_UI_SECRET_B64|NETWORK_DISABLE_IPV6|NETWORK_QDISC|NETWORK_DISABLE_MULTICAST|NETWORK_CT_ESTABLISHED|NETWORK_CT_SYN_SENT|NETWORK_CT_SYN_RECV|NETWORK_CT_FIN_WAIT|NETWORK_CT_CLOSE_WAIT|NETWORK_CT_LAST_ACK|NETWORK_CT_TIME_WAIT|NETWORK_CT_CLOSE|NETWORK_CT_UNACKNOWLEDGED|NETWORK_CT_UDP_STREAM|INBOUND_STRIP_SOCKS|INBOUND_STRIP_HTTP|INBOUND_STRIP_MIXED|LOCAL_SOCKS_ENABLED|LOCAL_SOCKS_PORT|LOCAL_SOCKS_USER_B64|LOCAL_SOCKS_PASS_B64|LOCAL_HTTP_ENABLED|LOCAL_HTTP_PORT|LOCAL_HTTP_USER_B64|LOCAL_HTTP_PASS_B64)
+      ACTIVE_PROFILE_ID|RUN_ENABLED|GLOBAL_HEADERS_B64|GLOBAL_OVERRIDE_B64|MIHOMO_MODE|LISTENER_MODE|REDIR_PORT|TPROXY_PORT|MIHOMO_FIND_PROCESS_MODE|MIHOMO_LOG_LEVEL|MIHOMO_IPV6|MIHOMO_STORE_SELECTED|MIHOMO_STORE_FAKE_IP|MIHOMO_SNIFFER_MODE|MIHOMO_SNIFFER_OVERRIDE|MIHOMO_SNIFFER_ENABLE|MIHOMO_SNIFFER_FORCE_DNS_MAPPING|MIHOMO_SNIFFER_PARSE_PURE_IP|MIHOMO_SNIFFER_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_QUIC_PORTS_B64|MIHOMO_SNIFFER_TLS_PORTS_B64|MIHOMO_SNIFFER_HTTP_PORTS_B64|MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_FORCE_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64|MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64|EXTERNAL_UI_PRESET|EXTERNAL_UI_URL_B64|EXTERNAL_UI_SECRET_B64|NETWORK_DISABLE_IPV6|NETWORK_QDISC|NETWORK_DISABLE_MULTICAST|NETWORK_CT_ESTABLISHED|NETWORK_CT_SYN_SENT|NETWORK_CT_SYN_RECV|NETWORK_CT_FIN_WAIT|NETWORK_CT_CLOSE_WAIT|NETWORK_CT_LAST_ACK|NETWORK_CT_TIME_WAIT|NETWORK_CT_CLOSE|NETWORK_CT_UNACKNOWLEDGED|NETWORK_CT_UDP_STREAM|INBOUND_STRIP_SOCKS|INBOUND_STRIP_HTTP|INBOUND_STRIP_MIXED|LOCAL_SOCKS_ENABLED|LOCAL_SOCKS_PORT|LOCAL_SOCKS_USER_B64|LOCAL_SOCKS_PASS_B64|LOCAL_HTTP_ENABLED|LOCAL_HTTP_PORT|LOCAL_HTTP_USER_B64|LOCAL_HTTP_PASS_B64|NETWORK_TCP_NOTSENT_LOWAT|NETWORK_TCP_SLOW_START_AFTER_IDLE|NETWORK_TCP_MTU_PROBING|NETWORK_TCP_FIN_TIMEOUT|NETWORK_TCP_CONGESTION|NETWORK_TCP_BUFFER_MAX)
         export "$key=$value"
         ;;
     esac
@@ -417,6 +464,7 @@ load_state() {
   valid_number "$NETWORK_CT_CLOSE" || NETWORK_CT_CLOSE=10
   valid_number "$NETWORK_CT_UNACKNOWLEDGED" || NETWORK_CT_UNACKNOWLEDGED=300
   valid_number "$NETWORK_CT_UDP_STREAM" || NETWORK_CT_UDP_STREAM=180
+  normalize_tcp_tuning
   if ! valid_profile_id "$ACTIVE_PROFILE_ID" || [ ! -f "$PROFILES_DIR/$ACTIVE_PROFILE_ID.conf" ]; then
     ACTIVE_PROFILE_ID=$(first_profile_id 2>/dev/null || true)
   fi
@@ -425,6 +473,8 @@ load_state() {
   META="$PROFILES_DIR/$ACTIVE_PROFILE_ID.source.meta"
   ERROR_FILE="$ERRORS_DIR/$ACTIVE_PROFILE_ID.txt"
   FINAL="$RUNTIME_DIR/$ACTIVE_PROFILE_ID.config.yaml"
+  FINAL_PREVIOUS="$RUNTIME_DIR/$ACTIVE_PROFILE_ID.config.previous.yaml"
+  FINAL_FAILED="$RUNTIME_DIR/$ACTIVE_PROFILE_ID.config.failed.yaml"
 }
 
 setup_auth() {
@@ -445,7 +495,7 @@ build_webroot() {
   # В webroot попадают только сами эндпоинты. _remna.sh сорсится по
   # абсолютному пути из /www, поэтому под cgi-bin ему делать нечего: httpd
   # пытается исполнить всё, что там лежит.
-  for file in remna-profile remna-status remna-config remna-refresh gen-hash remna-age-keygen; do
+  for file in remna-profile remna-status remna-config remna-refresh remna-check remna-backup gen-hash remna-age-keygen; do
     cp "$WEB_ROOT/cgi-bin/$file" "$WEBROOT/cgi-bin/$file"
     chmod 0755 "$WEBROOT/cgi-bin/$file" 2>/dev/null || true
   done
@@ -614,6 +664,11 @@ load_profile() {
   if [ "$LOCAL_OVERRIDE_ENABLED" = missing ]; then
     [ -n "$LOCAL_OVERRIDE_B64" ] && LOCAL_OVERRIDE_ENABLED=1 || LOCAL_OVERRIDE_ENABLED=0
   fi
+  normalize_profile_values
+}
+
+normalize_profile_values() {
+  case "$LOCAL_MODE" in inherit|source|rule|global|direct) ;; *) LOCAL_MODE=inherit ;; esac
   case "$LOCAL_OVERRIDE_ENABLED:$SUB_USE_PROVIDER_TITLE:$SUB_USE_PROVIDER_INTERVAL" in [01]:[01]:[01]) ;; *) LOCAL_OVERRIDE_ENABLED=0 SUB_USE_PROVIDER_TITLE=1 SUB_USE_PROVIDER_INTERVAL=1 ;; esac
   case "$LOCAL_FIND_PROCESS_MODE" in inherit|off|strict|always) ;; *) LOCAL_FIND_PROCESS_MODE=inherit ;; esac
   case "$LOCAL_LOG_LEVEL" in inherit|silent|error|warning|info|debug) ;; *) LOCAL_LOG_LEVEL=inherit ;; esac
@@ -622,21 +677,20 @@ load_profile() {
 }
 
 profile_meta_value() {
-  meta_key="$1"
-  awk -F= -v key="$meta_key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$META" 2>/dev/null || true
+  conf_get "$META" "$1" || true
+  printf '%s' "$CONF_VALUE"
 }
 
+# Результат в EFFECTIVE_REFRESH: таймер зовёт это для каждого профиля.
 effective_refresh_seconds() {
-  refresh="$SUB_REFRESH_SECONDS"
-  valid_number "$refresh" || refresh=3600
-  [ "$refresh" -ge 30 ] && [ "$refresh" -le 86400 ] || refresh=3600
-  if [ "$SUB_USE_PROVIDER_INTERVAL" = 1 ]; then
-    provider_refresh=$(profile_meta_value provider_refresh_seconds)
-    if valid_number "$provider_refresh" && [ "$provider_refresh" -ge 30 ] && [ "$provider_refresh" -le 86400 ]; then
-      refresh="$provider_refresh"
+  EFFECTIVE_REFRESH="$SUB_REFRESH_SECONDS"
+  valid_number "$EFFECTIVE_REFRESH" || EFFECTIVE_REFRESH=3600
+  [ "$EFFECTIVE_REFRESH" -ge 30 ] && [ "$EFFECTIVE_REFRESH" -le 86400 ] || EFFECTIVE_REFRESH=3600
+  if [ "$SUB_USE_PROVIDER_INTERVAL" = 1 ] && conf_get "$META" provider_refresh_seconds; then
+    if valid_number "$CONF_VALUE" && [ "$CONF_VALUE" -ge 30 ] && [ "$CONF_VALUE" -le 86400 ]; then
+      EFFECTIVE_REFRESH="$CONF_VALUE"
     fi
   fi
-  printf '%s' "$refresh"
 }
 
 resolve_listener_mode() {
@@ -663,13 +717,10 @@ resolve_network_interface() {
   }'
 }
 
+# Подпись собирается в переменную, а не печатается: вызов через $(...) стоил
+# бы форк каждые две секунды.
 network_signature() {
-  printf '%s|' \
-    "$NETWORK_DISABLE_IPV6" "$NETWORK_QDISC" "$NETWORK_DISABLE_MULTICAST" \
-    "$NETWORK_CT_ESTABLISHED" "$NETWORK_CT_SYN_SENT" "$NETWORK_CT_SYN_RECV" \
-    "$NETWORK_CT_FIN_WAIT" "$NETWORK_CT_CLOSE_WAIT" "$NETWORK_CT_LAST_ACK" \
-    "$NETWORK_CT_TIME_WAIT" "$NETWORK_CT_CLOSE" "$NETWORK_CT_UNACKNOWLEDGED" \
-    "$NETWORK_CT_UDP_STREAM"
+  NETWORK_SIGNATURE="$NETWORK_DISABLE_IPV6|$NETWORK_QDISC|$NETWORK_DISABLE_MULTICAST|$NETWORK_CT_ESTABLISHED|$NETWORK_CT_SYN_SENT|$NETWORK_CT_SYN_RECV|$NETWORK_CT_FIN_WAIT|$NETWORK_CT_CLOSE_WAIT|$NETWORK_CT_LAST_ACK|$NETWORK_CT_TIME_WAIT|$NETWORK_CT_CLOSE|$NETWORK_CT_UNACKNOWLEDGED|$NETWORK_CT_UDP_STREAM|$NETWORK_TCP_NOTSENT_LOWAT|$NETWORK_TCP_SLOW_START_AFTER_IDLE|$NETWORK_TCP_MTU_PROBING|$NETWORK_TCP_FIN_TIMEOUT|$NETWORK_TCP_CONGESTION|$NETWORK_TCP_BUFFER_MAX"
 }
 
 apply_network_settings() {
@@ -692,6 +743,14 @@ apply_network_settings() {
   NETWORK_CT_CLOSE="$NETWORK_CT_CLOSE" \
   NETWORK_CT_UNACKNOWLEDGED="$NETWORK_CT_UNACKNOWLEDGED" \
   NETWORK_CT_UDP_STREAM="$NETWORK_CT_UDP_STREAM" \
+  NETWORK_TCP_NOTSENT_LOWAT="$NETWORK_TCP_NOTSENT_LOWAT" \
+  NETWORK_TCP_SLOW_START_AFTER_IDLE="$NETWORK_TCP_SLOW_START_AFTER_IDLE" \
+  NETWORK_TCP_MTU_PROBING="$NETWORK_TCP_MTU_PROBING" \
+  NETWORK_TCP_FIN_TIMEOUT="$NETWORK_TCP_FIN_TIMEOUT" \
+  NETWORK_TCP_CONGESTION="$NETWORK_TCP_CONGESTION" \
+  NETWORK_TCP_BUFFER_MAX="$NETWORK_TCP_BUFFER_MAX" \
+  NETWORK_INFO_FILE="$NETWORK_INFO_FILE" \
+  NETWORK_SYSCTL_ORIGINAL_FILE="$NETWORK_SYSCTL_ORIGINAL_FILE" \
     sh "$MIHOMO_DIR/scripts/10-network-alpine.sh"
 }
 
@@ -905,7 +964,7 @@ inspect_source_vless_state() {
       }
       proxy_name=proxy_type=proxy_uuid=""
     }
-    /^[^[:space:]#][^:]*:/ {
+    /^[^[:space:]#-][^:]*:/ {
       if ($0 ~ /^proxies[[:space:]]*:/) {
         flush()
         in_proxies=1
@@ -1145,7 +1204,7 @@ extract_preserved_listeners() {
   # это то же самое, что top-level socks-port, port и mixed-port, только
   # записанное в listeners, и выключать их надо в обоих местах сразу.
   awk -v strip_socks="$INBOUND_STRIP_SOCKS" -v strip_http="$INBOUND_STRIP_HTTP" -v strip_mixed="$INBOUND_STRIP_MIXED" '
-    function is_top(line) { return line ~ /^[^[:space:]#][^:]*:/ }
+    function is_top(line) { return line ~ /^[^[:space:]#-][^:]*:/ }
     function indent(line, copy) {
       copy = line
       sub(/[^ ].*$/, "", copy)
@@ -1513,7 +1572,7 @@ replace_top_level_block() {
   # относятся к следующему ключу, поэтому они придерживаются в буфере и
   # возвращаются, если дальше действительно начинается top-level ключ.
   awk -v key="$rtlb_key" '
-    function is_top(line) { return line ~ /^[^[:space:]#][^:]*:/ }
+    function is_top(line) { return line ~ /^[^[:space:]#-][^:]*:/ }
     $0 ~ "^" key ":[[:space:]]*" { skip=1; held=0; next }
     skip && /^[[:space:]]*(#|$)/ { held++; hold[held]=$0; next }
     skip && is_top($0) { for (i = 1; i <= held; i++) print hold[i]; held=0; skip=0 }
@@ -1526,23 +1585,112 @@ replace_top_level_block() {
   fi
 }
 
+# Ключи вида prepend-<секция> и append-<секция> не заменяют секцию, а
+# дописывают свои элементы в её начало или конец: так в rules можно добавить
+# пару правил, не копируя весь список подписки, который потом устареет.
+is_merge_key() {
+  case "$1" in prepend-?*|append-?*) return 0 ;; esac
+  return 1
+}
+
+# Дописывает дочерние строки блока в секцию target. Отступ элементов
+# подгоняется под отступ секции в исходном файле. Секция в flow-стиле
+# (rules: [a, b]) не поддерживается, пустая ([] или {}) считается пустой.
+merge_top_level_block() {
+  mtlb_input="$1" mtlb_output="$2" mtlb_target="$3" mtlb_op="$4" mtlb_children="$5"
+  awk -v key="$mtlb_target" -v op="$mtlb_op" -v children="$mtlb_children" '
+    function is_top(line) { return line ~ /^[^[:space:]#-][^:]*:/ }
+    function indent(line, copy) { copy = line; sub(/[^ ].*$/, "", copy); return length(copy) }
+    function content(line) { return line !~ /^[[:space:]]*(#|$)/ }
+    function emit_children(target_indent,   i, line, pad) {
+      pad = sprintf("%" target_indent "s", "")
+      for (i = 1; i <= child_count; i++) {
+        line = child[i]
+        if (!content(line)) { sub(/^[[:space:]]+/, "", line); print (line == "" ? "" : pad line); continue }
+        print pad substr(line, child_indent + 1)
+      }
+    }
+    BEGIN {
+      child_indent = -1
+      while ((getline line < children) > 0) {
+        child[++child_count] = line
+        if (content(line) && (child_indent < 0 || indent(line) < child_indent)) child_indent = indent(line)
+      }
+      if (child_indent < 0) child_indent = 0
+    }
+    { lines[++n] = $0 }
+    END {
+      start = 0
+      for (i = 1; i <= n; i++) if (lines[i] ~ "^" key ":([[:space:]]|$)") { start = i; break }
+      if (!start) {
+        for (i = 1; i <= n; i++) print lines[i]
+        print key ":"
+        emit_children(2)
+        exit 0
+      }
+      inline = lines[start]
+      sub("^" key ":[[:space:]]*", "", inline)
+      sub(/[[:space:]]*#.*$/, "", inline)
+      if (inline != "" && inline != "[]" && inline != "{}") exit 3
+      finish = n
+      for (i = start + 1; i <= n; i++) if (is_top(lines[i])) { finish = i - 1; break }
+      target_indent = -1
+      last = start
+      for (i = start + 1; i <= finish; i++) {
+        if (!content(lines[i])) continue
+        if (target_indent < 0) target_indent = indent(lines[i])
+        last = i
+      }
+      if (target_indent < 0) target_indent = 2
+      for (i = 1; i <= n; i++) {
+        if (i == start && inline != "") { print key ":" } else print lines[i]
+        if ((op == "prepend" && i == start) || (op == "append" && i == last)) emit_children(target_indent)
+      }
+    }
+  ' "$mtlb_input" > "$mtlb_output"
+}
+
 apply_top_level_override() {
   atlo_input="$1" atlo_output="$2" atlo_override="$3"
-  [ -s "$atlo_override" ] || { cp "$atlo_input" "$atlo_output"; return 0; }
+  ATLO_ERROR=
   cp "$atlo_input" "$atlo_output"
-  awk '/^[^[:space:]#][^:]*:/ { sub(/:.*/, ""); print }' "$atlo_override" | while IFS= read -r atlo_key; do
-    case "$atlo_key" in ''|*[!0-9A-Za-z_-]*) continue ;; esac
-    atlo_block="$RUNTIME_DIR/override-block.yaml"
-    awk -v key="$atlo_key" '
-      function is_top(line) { return line ~ /^[^[:space:]#][^:]*:/ }
-      $0 ~ "^" key ":[[:space:]]*" { copy=1 }
-      copy && is_top($0) && $0 !~ "^" key ":[[:space:]]*" { exit }
-      copy { print }
-    ' "$atlo_override" > "$atlo_block"
-    [ -s "$atlo_block" ] || continue
-    replace_top_level_block "$atlo_output" "$atlo_output.next" "$atlo_key" "$atlo_block"
-    mv "$atlo_output.next" "$atlo_output"
+  [ -s "$atlo_override" ] || return 0
+  atlo_keys="$atlo_output.keys"
+  atlo_block="$atlo_output.block"
+  awk '/^[^[:space:]#-][^:]*:/ { sub(/:.*/, ""); print }' "$atlo_override" > "$atlo_keys"
+  # Сначала замены, потом дописывания: так append-rules работает и поверх
+  # rules, переписанных в том же оверрайде.
+  for atlo_pass in replace merge; do
+    while IFS= read -r atlo_key || [ -n "$atlo_key" ]; do
+      case "$atlo_key" in ''|*[!0-9A-Za-z_-]*) continue ;; esac
+      if is_merge_key "$atlo_key"; then
+        [ "$atlo_pass" = merge ] || continue
+      else
+        [ "$atlo_pass" = replace ] || continue
+      fi
+      awk -v key="$atlo_key" -v body="$atlo_pass" '
+        function is_top(line) { return line ~ /^[^[:space:]#-][^:]*:/ }
+        $0 ~ "^" key ":([[:space:]]|$)" { copy=1; if (body != "merge") print; next }
+        copy && is_top($0) { exit }
+        copy { print }
+      ' "$atlo_override" > "$atlo_block"
+      if [ "$atlo_pass" = replace ]; then
+        [ -s "$atlo_block" ] || continue
+        replace_top_level_block "$atlo_output" "$atlo_output.next" "$atlo_key" "$atlo_block"
+      else
+        grep -q '^[[:space:]]*[^[:space:]#]' "$atlo_block" || continue
+        atlo_op=${atlo_key%%-*}
+        atlo_target=${atlo_key#*-}
+        if ! merge_top_level_block "$atlo_output" "$atlo_output.next" "$atlo_target" "$atlo_op" "$atlo_block"; then
+          ATLO_ERROR="$atlo_key: секция $atlo_target в подписке записана в flow-стиле ([...]), дописать в неё нельзя"
+          rm -f "$atlo_keys" "$atlo_block" "$atlo_output.next"
+          return 1
+        fi
+      fi
+      mv "$atlo_output.next" "$atlo_output"
+    done < "$atlo_keys"
   done
+  rm -f "$atlo_keys" "$atlo_block"
 }
 
 remove_top_level_keys() {
@@ -1556,12 +1704,82 @@ remove_top_level_keys() {
   done
 }
 
+# Порты, которые слушает итоговый конфиг: верхнеуровневые *-port, записи
+# listeners и DNS. mihomo -t порт не занимает, поэтому конфликт иначе
+# всплывает только при запуске, и ядро уходит в цикл перезапусков.
+# 80 занят веб-панелью, 9090 — контроллером.
+find_port_conflict() {
+  awk '
+    function is_top(line) { return line ~ /^[^[:space:]#-][^:]*:/ }
+    function clean(value) {
+      sub(/[[:space:]]*#.*$/, "", value)
+      gsub(/^[[:space:]"\047]+|[[:space:]"\047]+$/, "", value)
+      return value
+    }
+    function claim(port, owner) {
+      if (port !~ /^[0-9]+$/) return
+      port += 0
+      if (port in owners) {
+        if (!conflict) conflict = "Порт " port " занят дважды: " owners[port] " и " owner
+        return
+      }
+      owners[port] = owner
+    }
+    BEGIN { owners[80] = "веб-панель контейнера"; owners[9090] = "контроллер Mihomo" }
+    is_top($0) {
+      section = $0
+      sub(/:.*/, "", section)
+      if (section ~ /^(port|socks-port|mixed-port|redir-port|tproxy-port)$/) {
+        value = $0
+        sub(/^[^:]*:/, "", value)
+        claim(clean(value), section)
+      }
+      listener = ""
+      next
+    }
+    section == "listeners" && /^[[:space:]]*-/ { listener = "" }
+    section == "listeners" && /(^|[[:space:]-])name[[:space:]]*:/ {
+      value = $0
+      sub(/^.*name[[:space:]]*:/, "", value)
+      sub(/,.*$/, "", value)
+      listener = clean(value)
+    }
+    section == "listeners" && /(^|[[:space:]-])port[[:space:]]*:/ {
+      value = $0
+      sub(/^.*[[:space:]-]port[[:space:]]*:/, "", value)
+      sub(/[,}].*$/, "", value)
+      claim(clean(value), "listener " (listener != "" ? listener : "без имени"))
+    }
+    section == "dns" && /^[[:space:]]+listen[[:space:]]*:/ {
+      value = clean(substr($0, index($0, ":") + 1))
+      sub(/^.*:/, "", value)
+      claim(value, "dns.listen")
+    }
+    END { if (conflict) print conflict }
+  ' "$1"
+}
+
+# BUILD_DRY_RUN=1 — проверка из веб-панели: тот же конвейер, но без записи
+# ошибок, метаданных и версии рабочего конфига профиля.
+build_fail() {
+  BUILD_ERROR="$1"
+  if [ "${BUILD_DRY_RUN:-0}" != 1 ]; then
+    {
+      printf '%s\n' "$BUILD_ERROR"
+      [ -z "${2:-}" ] || printf '%s\n' "$2"
+    } > "$ERROR_FILE"
+    update_source_meta_validation 0 "${2:-$BUILD_ERROR}"
+  fi
+  rm -f "$build_prefix".*
+  return 1
+}
+
 build_final_config() {
   BUILD_VALIDATION=
   BUILD_ERROR=
   [ -s "$SOURCE" ] || {
     BUILD_ERROR="No downloaded subscription"
-    printf '%s\n' "$BUILD_ERROR" > "$ERROR_FILE"
+    [ "${BUILD_DRY_RUN:-0}" = 1 ] || printf '%s\n' "$BUILD_ERROR" > "$ERROR_FILE"
     return 1
   }
   build_prefix="$RUNTIME_DIR/build.$ACTIVE_PROFILE_ID.$$"
@@ -1585,27 +1803,15 @@ build_final_config() {
   fi
   : > "$global_override"
   b64_decode_file "$GLOBAL_OVERRIDE_B64" > "$global_override"
-  if ! write_controller_overlay > "$controller_overlay"; then
-    BUILD_ERROR="Mihomo controller settings are invalid"
-    printf '%s\n' "$BUILD_ERROR" > "$ERROR_FILE"
-    update_source_meta_validation 0 "$BUILD_ERROR"
-    rm -f "$build_prefix".*
-    return 1
-  fi
+  write_controller_overlay > "$controller_overlay" || { build_fail "Mihomo controller settings are invalid"; return 1; }
   write_managed_overlay > "$managed_overlay"
   # Глобальный оверрайд накладывается первым, локальный поверх него: у
   # профиля должна быть возможность отменить общее правило.
   global_config="$build_prefix.global.yaml"
-  apply_top_level_override "$SOURCE" "$global_config" "$global_override"
-  apply_top_level_override "$global_config" "$local_config" "$local_override"
+  apply_top_level_override "$SOURCE" "$global_config" "$global_override" || { build_fail "Общий YAML: $ATLO_ERROR"; return 1; }
+  apply_top_level_override "$global_config" "$local_config" "$local_override" || { build_fail "Локальный YAML: $ATLO_ERROR"; return 1; }
   apply_top_level_override "$local_config" "$managed_config" "$managed_overlay"
-  if ! write_listeners_overlay "$managed_config" > "$overlay"; then
-    BUILD_ERROR="Listener settings are invalid"
-    printf '%s\n' "$BUILD_ERROR" > "$ERROR_FILE"
-    update_source_meta_validation 0 "$BUILD_ERROR"
-    rm -f "$build_prefix".*
-    return 1
-  fi
+  write_listeners_overlay "$managed_config" > "$overlay" || { build_fail "Listener settings are invalid"; return 1; }
   replace_top_level_block "$managed_config" "$listeners_config" listeners "$overlay"
   # Входы живут в конфиге дважды: верхнеуровневыми ключами и записями в
   # listeners. Вырезать надо оба места, иначе выключённый в панели SOCKS
@@ -1627,25 +1833,31 @@ build_final_config() {
     external-doh-server \
     secret
   apply_top_level_override "$controller_base" "$candidate" "$controller_overlay"
+  port_conflict=$(find_port_conflict "$candidate")
+  [ -z "$port_conflict" ] || { build_fail "$port_conflict"; return 1; }
   if ! mihomo -t -d "$MIHOMO_DIR" -f "$candidate" > "$validate_log" 2>&1; then
     BUILD_VALIDATION=$(cat "$validate_log" 2>/dev/null || true)
-    BUILD_ERROR="Рабочая конфигурация отклонена Mihomo"
-    {
-      printf '%s\n' "$BUILD_ERROR"
-      [ -z "$BUILD_VALIDATION" ] || printf '%s\n' "$BUILD_VALIDATION"
-    } > "$ERROR_FILE"
-    update_source_meta_validation 0 "$BUILD_VALIDATION"
-    rm -f "$build_prefix".*
+    build_fail "Рабочая конфигурация отклонена Mihomo" "$BUILD_VALIDATION"
     return 1
   fi
   BUILD_VALIDATION=$(cat "$validate_log" 2>/dev/null || true)
-  if ! mv "$candidate" "$FINAL"; then
-    BUILD_ERROR="Validated configuration could not be installed"
-    printf '%s\n' "$BUILD_ERROR" > "$ERROR_FILE"
-    update_source_meta_validation 0 "$BUILD_ERROR"
+  if [ "${BUILD_DRY_RUN:-0}" = 1 ]; then
+    mv "$candidate" "$FINAL" || { build_fail "Проверенную конфигурацию не удалось сохранить"; return 1; }
     rm -f "$build_prefix".*
+    return 0
+  fi
+  # Конфиг, который уже не запустился и был откачен, повторно не ставится:
+  # иначе каждое плановое обновление снова роняло бы ядро.
+  if [ -s "$FINAL_FAILED" ] && cmp -s "$candidate" "$FINAL_FAILED"; then
+    build_fail "Эта конфигурация уже не запустилась в Mihomo, оставлена предыдущая рабочая"
     return 1
   fi
+  # Прошлый рабочий конфиг остаётся рядом: если новый пройдёт mihomo -t, но
+  # не сможет запуститься, supervisor вернёт его.
+  if [ -s "$FINAL" ] && ! cmp -s "$candidate" "$FINAL"; then
+    mv "$FINAL" "$FINAL_PREVIOUS" 2>/dev/null || true
+  fi
+  mv "$candidate" "$FINAL" || { build_fail "Validated configuration could not be installed"; return 1; }
   final_version_file="$STATUS_DIR/$ACTIVE_PROFILE_ID.version"
   final_version=$(cat "$final_version_file" 2>/dev/null || printf '0')
   valid_number "$final_version" || final_version=0
@@ -1680,9 +1892,133 @@ stop() {
 trap reload USR1 HUP
 trap stop TERM INT
 
+write_check_result() {
+  wcr_file="$1"
+  wcr_tmp="$wcr_file.tmp.$$"
+  umask 077
+  {
+    printf 'STATE=%s\n' "$2"
+    printf 'FINISHED_EPOCH=%s\n' "$(date +%s)"
+    printf 'MESSAGE_B64=%s\n' "$(b64_encode "${3:-}")"
+    printf 'VALIDATION_B64=%s\n' "$(b64_encode "${4:-}")"
+  } > "$wcr_tmp"
+  mv "$wcr_tmp" "$wcr_file"
+}
+
+# Проверка из веб-панели: сборка с несохранёнными оверрайдами поверх
+# сохранённых настроек. Рабочий конфиг и статус профиля не трогаются.
+run_check_job() {
+  check_request="$1"
+  check_token=${check_request##*/}
+  check_token=${check_token%.request}
+  case "${check_token#c-}" in ''|*[!0-9-]*) rm -f "$check_request"; return 0 ;; esac
+  check_work="$check_request.work.$$"
+  mv "$check_request" "$check_work" 2>/dev/null || return 0
+  check_result="$CHECKS_DIR/$check_token.result"
+  check_yaml="$CHECKS_DIR/$check_token.yaml"
+  find "$CHECKS_DIR" -type f -mmin +15 2>/dev/null | while IFS= read -r check_old; do rm -f "$check_old"; done
+  conf_get "$check_work" PROFILE_ID || true
+  check_profile=$CONF_VALUE
+  load_state
+  if ! set_profile_context "$check_profile"; then
+    rm -f "$check_work"
+    write_check_result "$check_result" error "Подписка не найдена"
+    return 0
+  fi
+  load_profile
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *=*) ;; *) continue ;; esac
+    key=${line%%=*}
+    value=${line#*=}
+    case "$key" in
+      GLOBAL_OVERRIDE_B64|LOCAL_OVERRIDE_ENABLED|LOCAL_OVERRIDE_B64|LOCAL_MODE|LOCAL_FIND_PROCESS_MODE|LOCAL_LOG_LEVEL|LOCAL_IPV6|LOCAL_STORE_SELECTED|LOCAL_STORE_FAKE_IP|LOCAL_SNIFFER_MODE)
+        export "$key=$value"
+        ;;
+    esac
+  done < "$check_work"
+  rm -f "$check_work"
+  case "$LOCAL_OVERRIDE_ENABLED" in 0|1) ;; *) LOCAL_OVERRIDE_ENABLED=0 ;; esac
+  normalize_profile_values
+  write_check_result "$check_result" running
+  FINAL="$check_yaml"
+  BUILD_DRY_RUN=1
+  if build_final_config; then
+    write_check_result "$check_result" ok "Конфигурация принята Mihomo" "$BUILD_VALIDATION"
+  else
+    rm -f "$check_yaml"
+    write_check_result "$check_result" error "$BUILD_ERROR" "$BUILD_VALIDATION"
+  fi
+  BUILD_DRY_RUN=0
+}
+
+process_profile_job() {
+  job_id="$1" job_action="$2"
+  job_started=$(date +%s)
+  load_state
+  set_profile_context "$job_id" || return 0
+  load_profile
+  current_http=$(profile_meta_value http_status)
+  current_http_line=$(b64_decode_file "$(profile_meta_value http_status_line_b64)")
+  current_bytes=$(profile_meta_value bytes)
+  valid_number "$current_bytes" || current_bytes=0
+
+  if [ "$job_action" = fetch ]; then
+    write_profile_status "$job_id" running downloading fetch "$job_started" 0 "" "" 0 "Downloading subscription" ""
+    event_log INFO "$job_id" "subscription download started"
+    if ! fetch_source; then
+      job_finished=$(date +%s)
+      {
+        printf '%s\n' "Не удалось обновить подписку"
+        printf '%s\n' "$FETCH_ERROR"
+      } > "$ERROR_FILE"
+      write_profile_status "$job_id" error download fetch "$job_started" "$job_finished" "$FETCH_HTTP_CODE" "$FETCH_HTTP_LINE" "$FETCH_BYTES" "$FETCH_ERROR" ""
+      event_log ERROR "$job_id" "download failed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $FETCH_ERROR"
+      return 0
+    fi
+    current_http="$FETCH_HTTP_CODE"
+    current_http_line="$FETCH_HTTP_LINE"
+    current_bytes="$FETCH_BYTES"
+    write_profile_status "$job_id" running validating fetch "$job_started" 0 "$current_http" "$current_http_line" "$current_bytes" "Response saved; validating configuration" ""
+    if [ "$FETCH_SOURCE_CHANGED" = 1 ]; then
+      event_log INFO "$job_id" "download completed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $current_bytes bytes; saved response changed"
+    else
+      event_log INFO "$job_id" "download completed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $current_bytes bytes; response unchanged, flash write skipped"
+    fi
+  else
+    write_profile_status "$job_id" running building rebuild "$job_started" 0 "$current_http" "$current_http_line" "$current_bytes" "Building configuration from saved YAML" ""
+    event_log INFO "$job_id" "configuration rebuild started"
+  fi
+
+  if build_final_config; then
+    job_finished=$(date +%s)
+    write_profile_status "$job_id" ready ready "$job_action" "$job_started" "$job_finished" "$current_http" "$current_http_line" "$current_bytes" "Configuration accepted by Mihomo" "$BUILD_VALIDATION"
+    event_log INFO "$job_id" "configuration accepted and installed"
+    load_state
+    if [ "$RUN_ENABLED" = 1 ] && [ "$ACTIVE_PROFILE_ID" = "$job_id" ]; then
+      if [ -f "$JOBS_DIR/$job_id.request" ]; then
+        event_log INFO "$job_id" "newer profile update is queued; delaying Mihomo switch"
+      else
+        event_log INFO "$job_id" "requesting Mihomo restart with validated configuration"
+        kill -HUP 1 2>/dev/null || true
+      fi
+    fi
+  else
+    job_finished=$(date +%s)
+    job_message="$BUILD_ERROR"
+    [ -n "$job_message" ] || job_message="Configuration validation failed"
+    write_profile_status "$job_id" error validation "$job_action" "$job_started" "$job_finished" "$current_http" "$current_http_line" "$current_bytes" "$job_message" "$BUILD_VALIDATION"
+    event_log ERROR "$job_id" "$job_message; previous working configuration was kept"
+  fi
+}
+
 subscription_worker() {
   while :; do
     job_found=0
+    for check_request in "$CHECKS_DIR"/c-*.request; do
+      [ -f "$check_request" ] || continue
+      job_found=1
+      run_check_job "$check_request"
+    done
     for job_request in "$JOBS_DIR"/p-*.request; do
       [ -f "$job_request" ] || continue
       job_found=1
@@ -1691,77 +2027,38 @@ subscription_worker() {
       valid_profile_id "$job_id" || { rm -f "$job_request"; continue; }
       job_work="$job_request.work.$$"
       mv "$job_request" "$job_work" 2>/dev/null || continue
-      job_action=$(awk -F= '$1 == "ACTION" { print $2; exit }' "$job_work" 2>/dev/null || true)
+      conf_get "$job_work" ACTION || true
+      job_action=$CONF_VALUE
       rm -f "$job_work"
       case "$job_action" in fetch|rebuild) ;; *) continue ;; esac
-
-      job_started=$(date +%s)
-      load_state
-      set_profile_context "$job_id" || continue
-      load_profile
-      current_http=$(profile_meta_value http_status)
-      current_http_line=$(b64_decode_file "$(profile_meta_value http_status_line_b64)")
-      current_bytes=$(profile_meta_value bytes)
-      valid_number "$current_bytes" || current_bytes=0
-
-      if [ "$job_action" = fetch ]; then
-        write_profile_status "$job_id" running downloading fetch "$job_started" 0 "" "" 0 "Downloading subscription" ""
-        event_log INFO "$job_id" "subscription download started"
-        if ! fetch_source; then
-          job_finished=$(date +%s)
-          {
-            printf '%s\n' "Не удалось обновить подписку"
-            printf '%s\n' "$FETCH_ERROR"
-          } > "$ERROR_FILE"
-          write_profile_status "$job_id" error download fetch "$job_started" "$job_finished" "$FETCH_HTTP_CODE" "$FETCH_HTTP_LINE" "$FETCH_BYTES" "$FETCH_ERROR" ""
-          event_log ERROR "$job_id" "download failed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $FETCH_ERROR"
-          continue
-        fi
-        current_http="$FETCH_HTTP_CODE"
-        current_http_line="$FETCH_HTTP_LINE"
-        current_bytes="$FETCH_BYTES"
-        write_profile_status "$job_id" running validating fetch "$job_started" 0 "$current_http" "$current_http_line" "$current_bytes" "Response saved; validating configuration" ""
-        if [ "$FETCH_SOURCE_CHANGED" = 1 ]; then
-          event_log INFO "$job_id" "download completed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $current_bytes bytes; saved response changed"
-        else
-          event_log INFO "$job_id" "download completed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $current_bytes bytes; response unchanged, flash write skipped"
-        fi
-      else
-        write_profile_status "$job_id" running building rebuild "$job_started" 0 "$current_http" "$current_http_line" "$current_bytes" "Building configuration from saved YAML" ""
-        event_log INFO "$job_id" "configuration rebuild started"
-      fi
-
-      if build_final_config; then
-        job_finished=$(date +%s)
-        write_profile_status "$job_id" ready ready "$job_action" "$job_started" "$job_finished" "$current_http" "$current_http_line" "$current_bytes" "Configuration accepted by Mihomo" "$BUILD_VALIDATION"
-        event_log INFO "$job_id" "configuration accepted and installed"
-        load_state
-        if [ "$RUN_ENABLED" = 1 ] && [ "$ACTIVE_PROFILE_ID" = "$job_id" ]; then
-          if [ -f "$JOBS_DIR/$job_id.request" ]; then
-            event_log INFO "$job_id" "newer profile update is queued; delaying Mihomo switch"
-          else
-            event_log INFO "$job_id" "requesting Mihomo restart with validated configuration"
-            kill -HUP 1 2>/dev/null || true
-          fi
-        fi
-      else
-        job_finished=$(date +%s)
-        job_message="$BUILD_ERROR"
-        [ -n "$job_message" ] || job_message="Configuration validation failed"
-        write_profile_status "$job_id" error validation "$job_action" "$job_started" "$job_finished" "$current_http" "$current_http_line" "$current_bytes" "$job_message" "$BUILD_VALIDATION"
-        event_log ERROR "$job_id" "$job_message; previous working configuration was kept"
+      process_profile_job "$job_id" "$job_action"
+      # Профиль могли удалить, пока шла загрузка: всё, что задание успело
+      # записать, иначе осталось бы на флешке сиротами.
+      if [ ! -f "$PROFILES_DIR/$job_id.conf" ]; then
+        rm -f "$PROFILES_DIR/$job_id.source.yaml" "$PROFILES_DIR/$job_id.source.meta" \
+          "$RUNTIME_DIR/$job_id.config.yaml" "$RUNTIME_DIR/$job_id.config.previous.yaml" "$RUNTIME_DIR/$job_id.config.failed.yaml" \
+          "$ERRORS_DIR/$job_id.txt" "$STATUS_DIR/$job_id.conf" "$STATUS_DIR/$job_id.version"
       fi
     done
     [ "$job_found" = 1 ] && sleep 1 || sleep 2
   done
 }
 
+# Состояние панели пересчитывается, только когда в state.conf поменялся её
+# источник: раньше URL декодировался и маркер читался каждые две секунды.
 panel_worker() {
   panel_retry_at=0
+  panel_signature=
+  panel_url=
+  panel_ready_reported=0
+  panel_marker=$(cat "$APP_DIR/external-ui.source" 2>/dev/null || true)
   while :; do
     load_state
-    panel_url=$(effective_external_ui_url 2>/dev/null || true)
-    panel_marker=$(cat "$APP_DIR/external-ui.source" 2>/dev/null || true)
+    if [ "$EXTERNAL_UI_PRESET|$EXTERNAL_UI_URL_B64" != "$panel_signature" ]; then
+      panel_signature="$EXTERNAL_UI_PRESET|$EXTERNAL_UI_URL_B64"
+      panel_url=$(effective_external_ui_url 2>/dev/null || true)
+      panel_ready_reported=0
+    fi
     panel_force=0
     if [ -f "$UI_REQUEST" ]; then
       panel_work="$UI_REQUEST.work.$$"
@@ -1770,14 +2067,16 @@ panel_worker() {
         panel_force=1
       fi
     fi
-    panel_now=$(date +%s)
     if [ -n "$panel_url" ] && { [ "$panel_force" = 1 ] || [ "$panel_marker" != "$panel_url" ] || [ ! -s "$UI_DIR/index.html" ]; }; then
+      panel_now=$(date +%s)
       if [ "$panel_force" = 1 ] || [ "$panel_now" -ge "$panel_retry_at" ]; then
         write_ui_status downloading "Downloading Mihomo panel" "$panel_url"
         event_log INFO panel "external UI download started"
         if prepare_external_ui "$panel_force"; then
           write_ui_status ready "Mihomo panel is ready" "$panel_url"
           event_log INFO panel "external UI installed without restarting Mihomo"
+          panel_marker=$panel_url
+          panel_ready_reported=1
           panel_retry_at=0
         else
           [ -n "$PANEL_ERROR" ] || PANEL_ERROR="Mihomo panel download failed"
@@ -1786,9 +2085,9 @@ panel_worker() {
           panel_retry_at=$((panel_now + 60))
         fi
       fi
-    elif [ -s "$UI_DIR/index.html" ]; then
-      panel_state=$(awk -F= '$1 == "STATE" { print $2; exit }' "$UI_STATUS" 2>/dev/null || true)
-      [ "$panel_state" = ready ] || write_ui_status ready "Mihomo panel is ready" "$panel_url"
+    elif [ "$panel_ready_reported" = 0 ] && [ -s "$UI_DIR/index.html" ]; then
+      write_ui_status ready "Mihomo panel is ready" "$panel_url"
+      panel_ready_reported=1
     fi
     sleep 2
   done
@@ -1797,42 +2096,122 @@ panel_worker() {
 refresh_timer() {
   while :; do
     sleep 10
+    now=$(date +%s)
     for timer_profile in "$PROFILES_DIR"/p-*.conf; do
       [ -f "$timer_profile" ] || continue
       timer_id=${timer_profile##*/}
       timer_id=${timer_id%.conf}
-      load_state
       set_profile_context "$timer_id" || continue
       load_profile
-      timer_url=$(b64_decode_file "$SUB_URL_B64")
-      [ -n "$timer_url" ] || continue
-      timer_state=$(awk -F= '$1 == "STATE" { print $2; exit }' "$STATUS_DIR/$timer_id.conf" 2>/dev/null || true)
-      case "$timer_state" in queued|running) continue ;; esac
+      [ -n "$SUB_URL_B64" ] || continue
       [ -f "$JOBS_DIR/$timer_id.request" ] && continue
-      refresh_seconds=$(effective_refresh_seconds)
-      timer_action=$(awk -F= '$1 == "ACTION" { print $2; exit }' "$STATUS_DIR/$timer_id.conf" 2>/dev/null || true)
-      timer_finished=$(awk -F= '$1 == "FINISHED_EPOCH" { print $2; exit }' "$STATUS_DIR/$timer_id.conf" 2>/dev/null || true)
+      timer_status="$STATUS_DIR/$timer_id.conf"
+      conf_get "$timer_status" STATE || true
+      case "$CONF_VALUE" in queued|running) continue ;; esac
+      conf_get "$timer_status" ACTION || true
+      timer_action=$CONF_VALUE
+      conf_get "$timer_status" FINISHED_EPOCH || true
+      timer_finished=$CONF_VALUE
       valid_number "$timer_finished" || timer_finished=0
-      now=$(date +%s)
+      effective_refresh_seconds
       if [ ! -s "$SOURCE" ]; then
-        if [ "$timer_action" = fetch ] && [ $((now - timer_finished)) -lt "$refresh_seconds" ]; then
+        if [ "$timer_action" = fetch ] && [ $((now - timer_finished)) -lt "$EFFECTIVE_REFRESH" ]; then
           continue
         fi
         queue_profile_job_runtime "$timer_id" fetch "initial download"
         continue
       fi
-      fetched_epoch=$(profile_meta_value fetched_epoch)
+      conf_get "$META" fetched_epoch || true
+      fetched_epoch=$CONF_VALUE
       valid_number "$fetched_epoch" || fetched_epoch=0
       if [ "$timer_action" = fetch ] && [ "$timer_finished" -gt "$fetched_epoch" ]; then
         fetched_epoch=$timer_finished
       fi
-      [ $((now - fetched_epoch)) -ge "$refresh_seconds" ] || continue
+      [ $((now - fetched_epoch)) -ge "$EFFECTIVE_REFRESH" ] || continue
       queue_profile_job_runtime "$timer_id" fetch "scheduled refresh"
     done
   done
 }
 
+write_core_status() {
+  core_status_tmp="$CORE_STATUS.tmp.$$"
+  umask 077
+  {
+    printf 'STATE=%s\n' "$1"
+    printf 'PROFILE_ID=%s\n' "${2:-}"
+    printf 'EXIT_CODE=%s\n' "${3:-}"
+    printf 'FAST_FAILS=%s\n' "${4:-0}"
+    printf 'RETRY_IN=%s\n' "${5:-0}"
+    printf 'UPDATED_EPOCH=%s\n' "$(date +%s)"
+    printf 'REASON_B64=%s\n' "$(b64_encode "${6:-}")"
+  } > "$core_status_tmp"
+  mv "$core_status_tmp" "$CORE_STATUS"
+}
+
+# Вывод ядра идёт через FIFO в awk: тот печатает его в журнал контейнера, как
+# раньше, и дописывает в кольцевой файл для веб-панели. Через FIFO, а не
+# через конвейер, чтобы $! остался PID самого mihomo.
+CORE_LOG_PID=
+start_core() {
+  core_log_size=$(wc -c < "$CORE_LOG" 2>/dev/null || printf '0')
+  valid_number "$core_log_size" || core_log_size=0
+  [ "$core_log_size" -le 262144 ] || mv -f "$CORE_LOG" "$CORE_LOG.1"
+  printf '===== %s · %s · %s =====\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$1" "$(mihomo -v 2>/dev/null | head -n1)" >> "$CORE_LOG"
+  CORE_LOG_PID=
+  rm -f "$CORE_FIFO"
+  if mkfifo "$CORE_FIFO" 2>/dev/null; then
+    awk -v f="$CORE_LOG" '{
+      print; fflush()
+      print >> f; fflush(f)
+      if (++n >= 1500) { close(f); system("mv -f \"" f "\" \"" f ".1\""); n = 0 }
+    }' < "$CORE_FIFO" &
+    CORE_LOG_PID=$!
+    mihomo -d "$MIHOMO_DIR" -f "$FINAL" > "$CORE_FIFO" 2>&1 &
+  else
+    mihomo -d "$MIHOMO_DIR" -f "$FINAL" &
+  fi
+  MIHOMO_PID=$!
+}
+
+# Причина падения — последняя строка error/fatal/panic текущего запуска.
+core_exit_reason() {
+  awk '
+    /^===== / { line = "" ; next }
+    /level=(error|fatal)|^panic:|^fatal error:/ { line = $0 }
+    END {
+      if (line == "") exit
+      if (match(line, /msg="[^"]*"/)) line = substr(line, RSTART + 5, RLENGTH - 6)
+      print substr(line, 1, 400)
+    }
+  ' "$CORE_LOG" 2>/dev/null
+}
+
+# Новый конфиг прошёл mihomo -t, но ядро с ним не живёт: возвращаем прошлый
+# рабочий, а упавший запоминаем, чтобы плановое обновление не поставило его
+# снова.
+rollback_final_config() {
+  rollback_reason="$1"
+  [ -s "$FINAL_PREVIOUS" ] || return 1
+  cmp -s "$FINAL_PREVIOUS" "$FINAL" && return 1
+  mv "$FINAL" "$FINAL_FAILED" || return 1
+  mv "$FINAL_PREVIOUS" "$FINAL" || { mv "$FINAL_FAILED" "$FINAL"; return 1; }
+  rollback_message="Новая конфигурация не запускается в Mihomo, возвращена предыдущая рабочая"
+  {
+    printf '%s\n' "$rollback_message"
+    [ -z "$rollback_reason" ] || printf '%s\n' "$rollback_reason"
+  } > "$ERROR_FILE"
+  update_source_meta_validation 0 "$rollback_message${rollback_reason:+: $rollback_reason}"
+  rollback_version_file="$STATUS_DIR/$ACTIVE_PROFILE_ID.version"
+  rollback_version=$(cat "$rollback_version_file" 2>/dev/null || printf '0')
+  valid_number "$rollback_version" || rollback_version=0
+  printf '%s\n' "$((rollback_version + 1))" > "$rollback_version_file"
+  event_log ERROR "$ACTIVE_PROFILE_ID" "$rollback_message"
+  return 0
+}
+
 supervisor() {
+  CORE_FAST_FAILS=0
+  core_profile=
   while [ "$STOPPING" = 0 ]; do
     load_state
     if [ "$RUN_ENABLED" != 1 ]; then
@@ -1841,6 +2220,11 @@ supervisor() {
         route_cleanup
         ROUTING_ACTIVE=0
         log "network interception stopped and cleaned"
+      fi
+      if [ "$core_profile" != stopped ]; then
+        write_core_status stopped
+        core_profile=stopped
+        CORE_FAST_FAILS=0
       fi
       RESTART_REQUESTED=0
       sleep 1
@@ -1868,6 +2252,8 @@ supervisor() {
       continue
     fi
 
+    [ "$core_profile" = "$active_id" ] || CORE_FAST_FAILS=0
+    core_profile=$active_id
     RESTART_REQUESTED=0
     gateway_probe_block || true
     route_cleanup
@@ -1884,27 +2270,59 @@ supervisor() {
     fi
     case "$ROUTE_MODE" in tproxy|redir-tproxy) ROUTING_ACTIVE=1 ;; esac
     event_log INFO "$active_id" "starting Mihomo ($(mihomo -v 2>/dev/null | head -n1))"
-    mihomo -d "$MIHOMO_DIR" -f "$FINAL" &
-    MIHOMO_PID=$!
+    start_core "$active_id"
+    core_pid=$MIHOMO_PID
+    core_started=$(date +%s)
+    write_core_status running "$active_id" "" "$CORE_FAST_FAILS"
     if ! route_post_start >> "$RUNTIME_DIR/route.log" 2>&1; then
       printf '%s\n' "Failed to apply post-start routing rules" > "$ERROR_FILE"
-      kill -TERM "$MIHOMO_PID" 2>/dev/null || true
+      kill -TERM "$core_pid" 2>/dev/null || true
     else
       [ "$ROUTE_MODE" = redir-tun ] && ROUTING_ACTIVE=1
-      if kill -0 "$MIHOMO_PID" 2>/dev/null; then
+      if kill -0 "$core_pid" 2>/dev/null; then
         gateway_probe_allow
       fi
     fi
-    wait "$MIHOMO_PID"
+    # wait прерывается пойманным сигналом раньше, чем ядро завершится, и
+    # новый запуск упёрся бы в ещё занятые порты старого.
+    wait "$core_pid"
     rc=$?
+    while kill -0 "$core_pid" 2>/dev/null; do
+      wait "$core_pid"
+      rc=$?
+    done
     MIHOMO_PID=
+    [ -z "$CORE_LOG_PID" ] || wait "$CORE_LOG_PID" 2>/dev/null
     gateway_probe_block || true
     route_cleanup
     ROUTING_ACTIVE=0
     [ "$STOPPING" = 1 ] && break
-    [ "$RESTART_REQUESTED" = 1 ] && continue
-    event_log ERROR "$active_id" "Mihomo exited with code $rc; retrying in 5 seconds"
-    sleep 5
+    if [ "$RESTART_REQUESTED" = 1 ]; then
+      CORE_FAST_FAILS=0
+      continue
+    fi
+    core_runtime=$(( $(date +%s) - core_started ))
+    if [ "$core_runtime" -lt 30 ]; then
+      CORE_FAST_FAILS=$((CORE_FAST_FAILS + 1))
+    else
+      CORE_FAST_FAILS=1
+    fi
+    core_reason=$(core_exit_reason)
+    event_log ERROR "$active_id" "Mihomo exited with code $rc${core_reason:+: $core_reason}"
+    if [ "$CORE_FAST_FAILS" -ge 3 ] && rollback_final_config "$core_reason"; then
+      CORE_FAST_FAILS=0
+      continue
+    fi
+    # Повторы реже с каждым быстрым падением подряд: 5, 10, 20, 40, 60 секунд.
+    core_delay=5
+    core_step=1
+    while [ "$core_step" -lt "$CORE_FAST_FAILS" ] && [ "$core_delay" -lt 60 ]; do
+      core_delay=$((core_delay * 2))
+      core_step=$((core_step + 1))
+    done
+    [ "$core_delay" -le 60 ] || core_delay=60
+    write_core_status crashed "$active_id" "$rc" "$CORE_FAST_FAILS" "$core_delay" "$core_reason"
+    sleep "$core_delay"
   done
 }
 
@@ -1913,7 +2331,8 @@ network_settings_watcher() {
   while :; do
     sleep 2
     load_state
-    current_signature=$(network_signature)
+    network_signature
+    current_signature=$NETWORK_SIGNATURE
     [ "$current_signature" != "$applied_signature" ] || continue
     if apply_network_settings 0 > "$RUNTIME_DIR/network.log" 2>&1; then
       applied_signature=$current_signature
@@ -1937,7 +2356,8 @@ for persistent_error in "$PROFILES_DIR"/p-*.error.txt; do
   rm -f "$persistent_error"
 done
 load_state
-startup_network_signature=$(network_signature)
+network_signature
+startup_network_signature=$NETWORK_SIGNATURE
 if apply_network_settings 1 > "$RUNTIME_DIR/network.log" 2>&1; then
   printf '%s' "$startup_network_signature" > "$NETWORK_SIGNATURE_FILE"
   log "Alpine network settings applied"

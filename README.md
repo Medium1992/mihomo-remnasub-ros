@@ -17,6 +17,12 @@
 - 📚 Multiple complete YAML subscriptions with an active profile, manual/periodic refresh, and per-profile settings.
 - 🧾 Required and custom Remnawave request headers, with optional per-subscription overrides.
 - 🧩 Managed global and local overrides for listeners, controller, UI, process mode, logs, IPv6, profile storage, and sniffer.
+- ➕ `prepend-rules` / `append-rules` (and the same for other sections) add your own entries to the start or end of the subscription's list without copying it.
+- 🧪 A **Check** button for overrides: build and `mihomo -t` without saving, with the resulting YAML.
+- ↩️ Rollback: when a configuration passes `mihomo -t` but the core keeps crashing with it, the previous working one is restored.
+- 📜 The core's own log next to the container events.
+- 🚀 TCP tuning for the container's sockets (`tcp_notsent_lowat`, MTU probing and more), with a report of what applied.
+- 💼 Backup and restore of settings and subscriptions as one file.
 - 🔀 REDIR + TPROXY, REDIR + TUN, and TPROXY interception modes selected according to RouterOS kernel support.
 - ✅ Atomic activation: a downloaded configuration replaces the running one only after `mihomo -t` succeeds.
 - 🖥 Embedded subscription UI on port `80` and a downloadable Mihomo dashboard on port `9090`.
@@ -32,7 +38,8 @@
 4. Per-profile, managed global, listener, and controller overrides are applied in that order.
 5. The candidate is checked with `mihomo -t` and becomes the runtime YAML only when validation succeeds.
 6. A failed update does not stop a previously valid running configuration.
-7. The selected subscription and run/stop state survive container restarts.
+7. If a configuration passed validation but the core crashes with it three times in a row within 30 seconds of starting, the previous working one is restored and the crashing one is not installed again by scheduled refreshes. Restarts back off 5, 10, 20, 40, 60 seconds.
+8. The selected subscription and run/stop state survive container restarts.
 
 ## ⚡ Quick Docker Start
 
@@ -80,15 +87,16 @@ Open `http://192.168.253.2/` after startup. RouterOS routing/mangle rules must d
 
 ### Subscriptions
 
-- clicking a subscription row selects it as active;
-- start/stop controls are enabled only for the active subscription;
+- clicking a subscription row or its ✓ button makes it active; while the core runs this asks first, because it restarts Mihomo and drops connections;
+- ▶ on the active subscription starts the core, on another one it selects it and starts straight away;
 - refresh downloads the source regardless of the core state;
-- per-profile settings include provider interval/title handling, headers, and local overrides;
+- per-profile settings include provider interval/title handling, headers, and local overrides; closing with unsaved changes asks first;
+- **Duplicate** copies a profile, which then downloads its own YAML;
 - **Source YAML** shows the latest raw HTTP response;
-- **Runtime YAML** shows the validated result after all overrides;
-- **Events** shows download, validation, runtime, and UI activity stored only in RAM.
+- **Runtime YAML** shows the validated result after all overrides, and its **Changes** tab lists the sections added, changed, or removed relative to the subscription;
+- **Logs** shows container events and the core's own output, stored only in RAM.
 
-The UI reads standard Remnawave metadata. It also reports VLESS proxies with an all-zero UUID, which commonly indicates an expired, disabled, or restricted subscription despite an HTTP 200 response.
+Each card shows traffic and expiry from `subscription-userinfo`, highlighted three days before expiry and past 90 % of the quota. The UI reads standard Remnawave metadata. It also reports VLESS proxies with an all-zero UUID, which commonly indicates an expired, disabled, or restricted subscription despite an HTTP 200 response.
 
 ![Settings - overrides](/docs/screenshots/settings-overrides.png)
 
@@ -96,12 +104,15 @@ The UI reads standard Remnawave metadata. It also reports VLESS proxies with an 
 
 - **Headers**: global request headers for every subscription.
 - **Inbound traffic**: interception mode and REDIR/TPROXY ports.
-- **Alpine network**: IPv6, multicast, qdisc, and conntrack timeouts.
+- **Alpine network**: IPv6, multicast, qdisc, conntrack timeouts, and TCP tuning.
 - **Mihomo UI**: Zashboard/MetaCubeXD/Yacd-meta/custom archive and controller secret.
 - **Global overrides**: managed Mihomo and sniffer settings.
 - **Appearance**: dark and light themes, the Graphite, Midnight, Forest and Sepia presets, and a
   custom accent colour. The choice is stored in the container and applies to everyone opening the panel.
 - **Access**: md5crypt generator for `BASIC_AUTH_HASH`.
+- **Backup**: download settings and every subscription as one file, and restore from it.
+
+Unsaved settings are marked with a dot on **Save**, and closing the tab with them asks first.
 
 ![Settings - appearance](/docs/screenshots/settings-appearance.png)
 
@@ -163,14 +174,33 @@ Precedence: **source YAML → shared YAML → per-profile YAML → managed globa
 
 The shared YAML is written once under **Settings → Overrides** and is applied to every subscription. The profile's own YAML is applied after it, so a subscription can undo a shared rule for its own section.
 
-Overrides **replace a whole top-level section rather than merging into it**. Override `dns` and nothing survives from the original section but what you wrote, so spell the block out in full. The preset buttons above the editor insert ready-made sections: DoH resolvers, pinning their addresses, LAN access, geodata, connection tuning.
+Overrides **replace a whole top-level section rather than merging into it**. Override `dns` and nothing survives from the original section but what you wrote, so spell the block out in full.
+
+To **add** entries instead of replacing a section, prefix the key with `prepend-` or `append-`:
+
+```yaml
+prepend-rules:                 # to the start of the subscription's rules
+  - GEOSITE,category-ru,DIRECT
+  - GEOIP,RU,DIRECT,no-resolve
+append-proxies:                # to the end of proxies
+  - name: backup
+    type: direct
+```
+
+Any section works: `rules`, `proxies`, `proxy-groups`, `rule-providers`, `hosts` and so on. Replacements are applied first and additions second, so `append-rules` also works on top of `rules` rewritten in the same YAML. Entries are re-indented to match the subscription's section, and a missing section is created. Write the entries as a block list on new lines: `prepend-rules: [a, b]` is not supported, and neither is adding to a subscription section written in `[...]` flow style.
+
+The preset buttons above the editor insert ready-made pieces: RU direct, LAN direct, Block QUIC (all three `prepend-rules`), DoH resolvers, pinning their addresses, LAN access, geodata, connection tuning. A preset whose key is already present is merged into that block instead of duplicating the key.
+
+The **Check** button below the editor builds the configuration through the same pipeline as the runtime one, runs `mihomo -t` and shows the output and resulting YAML, saving nothing. The shared YAML is checked against the active subscription, a profile's YAML against its own subscription together with the unsaved values of its override block. Everything else comes from the saved settings.
 
 Two formatting rules are checked before saving, because both break the parser:
 
 - a list at the top level (`- MATCH,DIRECT` with no key above it) — items must be indented under their section, otherwise a line such as `- IP-CIDR,2001:db8::/32,PROXY` is indistinguishable from the start of a new key;
 - tabs used for indentation, which YAML does not allow.
 
-Keys the container sets itself after the override is applied are pointless to write here: `find-process-mode`, `log-level`, `ipv6`, `profile`, `listeners`, `redir-port`, `tproxy-port`, `tun`, `external-controller*`, `external-ui*`, `secret`. The editor flags them as you type.
+Keys the container sets itself after the override is applied are pointless to write here: `find-process-mode`, `log-level`, `ipv6`, `profile`, `listeners`, `redir-port`, `tproxy-port`, `tun`, `external-controller*`, `external-ui*`, `secret`. Depending on the settings, `mode` (when a specific mode is selected), `sniffer` (when its override is on) and `socks-port`, `port`, `mixed-port` (while they are being stripped) join them. The editor flags them as you type, following the current switches.
+
+Before `mihomo -t`, the resulting configuration is checked for port conflicts: `mihomo -t` does not bind ports, so two inbounds on one port would otherwise surface only at start. Ports `53`, `80` and `9090` belong to the core's DNS, the WebUI and the controller.
 
 ## 🔒 Encrypted subscriptions
 
@@ -217,7 +247,7 @@ Stripping happens **at both levels at once**: the top-level `socks-port`, `port`
 
 A local SOCKS5 and HTTP proxy are enabled in the same place, independently of each other and **off by default**. Each has its own port and optional username and password. An empty username means no authentication, and the inbound is then open to everyone on the network, since it listens on every interface. An empty `users` list is written explicitly so the inbound does not inherit `authentication` from the subscription and "no password" in the panel means exactly that.
 
-Ports are checked before saving: they must differ from each other and from the REDIR and TPROXY ports, or the core refuses to bring up the second listener.
+Ports are checked before saving: they must differ from each other, from the REDIR and TPROXY ports and from `53`, `80` and `9090`, or the core refuses to bring up the second listener.
 
 The default ports are `12345` for REDIR and `12346` for TPROXY. Start creates only the selected mode's rules; stop removes only rules and routes owned by this container.
 
@@ -228,6 +258,7 @@ The default ports are `12345` for REDIR and `12346` for TPROXY. Start creates on
 - IPv6 and multicast are disabled by default.
 - `fq_codel` is the default qdisc. `cake`, `codel`, `sfq`, `pfifo`, and `bfifo` require their kernel module to be loaded by RouterOS.
 - Conntrack defaults are aligned with RouterOS and can be edited or reset in the UI.
+- TCP tuning for the container's sockets, that is Mihomo's outbound connections: `tcp_notsent_lowat` 128 KB (unlimited in the kernel, which costs memory and adds bufferbloat), `tcp_slow_start_after_idle` 0, `tcp_mtu_probing` 1, `tcp_fin_timeout` 30 s; optionally a congestion control algorithm from those the kernel has and a cap on `tcp_rmem`/`tcp_wmem`. "System" restores the kernel value from container start. Each parameter shows whether it applied, since some sysctls are read-only inside the container's netns. `tcp_keepalive_*` is left out on purpose — Mihomo sets keepalive on every socket itself (`keep-alive-idle`, `keep-alive-interval`) — and `nf_conntrack_max` and `net.core.*mem_max` belong to RouterOS.
 - A dedicated chain blocks only inbound IPv4 ICMP echo requests from the RouterOS-facing interface while Mihomo is not running. Ping is allowed after both Mihomo and the interception rules start successfully, then blocked again on stop, invalid configuration, or profile switch. This lets `check-gateway=ping` mark the route unavailable without blocking the WebUI or other container INPUT traffic.
 
 ## 🔐 Environment Variables
@@ -257,7 +288,11 @@ Escape every `$` as `\$` when entering the hash in a RouterOS terminal command.
 
 /dev/shm/remnasub/
 ├── p-*.config.yaml
+├── p-*.config.previous.yaml
+├── p-*.config.failed.yaml
 ├── events.log
+├── core.log, core.log.1
+├── checks/
 ├── jobs/ and status/
 ├── errors/
 ├── httpd.conf

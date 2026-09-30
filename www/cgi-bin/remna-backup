@@ -1,0 +1,139 @@
+#!/bin/sh
+# Резервная копия: state.conf и профили одним текстовым файлом.
+#   GET   -> файл копии
+#   POST  -> восстановление из тела запроса (text/plain)
+# Загруженные YAML в копию не входят: после восстановления подписки
+# скачиваются заново. Ключи расшифровки и пароли входов в копии есть.
+. /www/cgi-bin/_remna.sh
+
+BACKUP_HEADER='# RemnaSub RoS backup v1'
+
+if [ "${REQUEST_METHOD:-GET}" = GET ]; then
+  echo 'Content-Type: text/plain; charset=utf-8'
+  printf 'Content-Disposition: attachment; filename="remnasub-backup-%s.txt"\n' "$(date +%Y%m%d-%H%M)"
+  common_headers
+  echo ''
+  printf '%s\n' "$BACKUP_HEADER"
+  printf '@state\n'
+  cat "$STATE" 2>/dev/null
+  for backup_profile in "$PROFILES_DIR"/p-*.conf; do
+    [ -f "$backup_profile" ] || continue
+    backup_id=${backup_profile##*/}
+    backup_id=${backup_id%.conf}
+    valid_profile_id "$backup_id" || continue
+    printf '@profile %s\n' "$backup_id"
+    cat "$backup_profile"
+  done
+  exit 0
+fi
+
+require_post
+valid_number "${CONTENT_LENGTH:-0}" || deny 'invalid request length'
+[ "${CONTENT_LENGTH:-0}" -le 1048576 ] || deny 'Файл копии больше 1 МиБ'
+stage="$RUNTIME_DIR/backup-stage.$$"
+body="$stage/body.txt"
+rm -rf "$stage"
+mkdir -p "$stage"
+umask 077
+head -c "${CONTENT_LENGTH:-0}" | tr -d '\r' > "$body"
+
+restore_fail() {
+  rm -rf "$stage"
+  deny "$1"
+}
+
+first_line=
+read -r first_line < "$body" || true
+[ "$first_line" = "$BACKUP_HEADER" ] || restore_fail 'Это не файл резервной копии RemnaSub RoS'
+
+# Разбор только встроенными средствами. Ключи и значения проверяются по
+# набору символов: в файлах хранится только base64 и простые токены.
+target=
+profile_total=0
+state_seen=0
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in
+    ''|'#'*) continue ;;
+    '@state')
+      [ "$state_seen" = 0 ] || restore_fail 'В копии две секции состояния'
+      state_seen=1
+      target="$stage/state.conf"
+      : > "$target"
+      ;;
+    '@profile '*)
+      restore_id=${line#@profile }
+      valid_profile_id "$restore_id" || restore_fail 'В копии недопустимый идентификатор подписки'
+      [ ! -e "$stage/$restore_id.conf" ] || restore_fail 'В копии подписка повторяется'
+      target="$stage/$restore_id.conf"
+      : > "$target"
+      profile_total=$((profile_total + 1))
+      ;;
+    *=*)
+      [ -n "$target" ] || restore_fail 'Файл копии повреждён'
+      restore_key=${line%%=*}
+      restore_value=${line#*=}
+      case "$restore_key" in ''|*[!A-Z0-9_]*) restore_fail 'Файл копии повреждён' ;; esac
+      case "$restore_value" in *[!A-Za-z0-9+/=_.#-]*) restore_fail 'Файл копии повреждён' ;; esac
+      printf '%s=%s\n' "$restore_key" "$restore_value" >> "$target"
+      ;;
+    *) restore_fail 'Файл копии повреждён' ;;
+  esac
+done < "$body"
+[ "$state_seen" = 1 ] || restore_fail 'В копии нет настроек контейнера'
+[ "$profile_total" -gt 0 ] || restore_fail 'В копии нет ни одной подписки'
+
+restore_active=
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in ACTIVE_PROFILE_ID=*) restore_active=${line#*=} ;; esac
+done < "$stage/state.conf"
+if ! valid_profile_id "$restore_active" || [ ! -f "$stage/$restore_active.conf" ]; then
+  restore_active=
+  for restore_profile in "$stage"/p-*.conf; do
+    restore_active=${restore_profile##*/}
+    restore_active=${restore_active%.conf}
+    break
+  done
+fi
+
+state_lock
+state_load
+# Запущено ли ядро, решает текущий контейнер, а не копия: восстановление не
+# должно ни ронять работающий шлюз, ни поднимать остановленный.
+restore_run="$ST_RUN_ENABLED"
+for old_profile in "$PROFILES_DIR"/p-*.conf; do
+  [ -f "$old_profile" ] || continue
+  old_id=${old_profile##*/}
+  old_id=${old_id%.conf}
+  valid_profile_id "$old_id" || continue
+  rm -f "$old_profile" \
+    "$PROFILES_DIR/$old_id.source.yaml" "$PROFILES_DIR/$old_id.source.meta" \
+    "$RUNTIME_DIR/$old_id.config.yaml" "$RUNTIME_DIR/$old_id.config.previous.yaml" "$RUNTIME_DIR/$old_id.config.failed.yaml" \
+    "$ERRORS_DIR/$old_id.txt" "$JOBS_DIR/$old_id.request" "$STATUS_DIR/$old_id.conf" "$STATUS_DIR/$old_id.version"
+done
+for restore_profile in "$stage"/p-*.conf; do
+  [ -f "$restore_profile" ] || continue
+  mv "$restore_profile" "$PROFILES_DIR/${restore_profile##*/}"
+  chmod 600 "$PROFILES_DIR/${restore_profile##*/}" 2>/dev/null || true
+done
+{
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ACTIVE_PROFILE_ID=*|RUN_ENABLED=*) continue ;; esac
+    printf '%s\n' "$line"
+  done < "$stage/state.conf"
+  printf 'ACTIVE_PROFILE_ID=%s\n' "$restore_active"
+  printf 'RUN_ENABLED=%s\n' "$restore_run"
+} > "$stage/state.next"
+persist_file_if_changed "$stage/state.next" "$STATE" || { state_unlock; restore_fail 'Не удалось записать настройки'; }
+state_unlock
+
+for restored_profile in "$PROFILES_DIR"/p-*.conf; do
+  [ -f "$restored_profile" ] || continue
+  restored_id=${restored_profile##*/}
+  restored_id=${restored_id%.conf}
+  profile_load "$restored_profile"
+  [ -z "$P_SUB_URL_B64" ] || queue_profile_job "$restored_id" fetch "backup restored"
+done
+rm -rf "$stage"
+kill -HUP 1 2>/dev/null || true
+json_headers
+printf '{"ok":true,"profiles":%s,"active_profile_id":"%s"}\n' "$profile_total" "$restore_active"

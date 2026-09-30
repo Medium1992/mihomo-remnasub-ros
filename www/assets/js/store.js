@@ -9,16 +9,26 @@ export const store = {
   runtime: {}
 };
 
+let settingsDirty = false;
+
 // Флаги и отпечатки рендера. Отпечаток нужен, чтобы опрос раз в пять секунд
 // не перерисовывал разметку, в которой пользователь стоит курсором.
 export const ui = {
   editorProfileId: "",
   editorRequestToken: 0,
+  editorSnapshot: "",
   selectingProfileId: "",
   sourceYamlProfileId: "",
   deleteProfileId: "",
   settingsReady: false,
-  settingsDirty: false,
+  // Флаг ставят десятки обработчиков, поэтому метка несохранённых правок на
+  // кнопке «Сохранить» переключается прямо здесь.
+  get settingsDirty() { return settingsDirty; },
+  set settingsDirty(value) {
+    settingsDirty = Boolean(value);
+    const button = document.getElementById("save-settings");
+    if (button) button.classList.toggle("dirty", settingsDirty);
+  },
   settingsFingerprint: "",
   subscriptionsFingerprint: "",
   sidebarFingerprint: "",
@@ -81,6 +91,24 @@ export function profileDiagnostic(profile) {
 
 export function anyBackgroundWork() {
   return store.model.profiles.some(profileBusy) || store.runtime.external_ui_state === "downloading";
+}
+
+// Трафик и срок из subscription-userinfo для карточки. level: "" | warning | error —
+// warning за три дня до конца срока или после 90 % лимита.
+export function subscriptionUsage(profile) {
+  const raw = decode(profile && profile.subscription_userinfo_b64);
+  if (!raw) return null;
+  const info = parseSubscriptionUserinfo(raw);
+  const used = Number(info.upload || 0) + Number(info.download || 0);
+  const total = Number(info.total || 0);
+  const expire = Number(info.expire || 0);
+  const now = Math.floor(Date.now() / 1000);
+  const daysLeft = expire > 0 ? Math.floor((expire - now) / 86400) : null;
+  const ratio = total > 0 ? used / total : 0;
+  let level = "";
+  if ((expire > 0 && expire <= now) || (total > 0 && used >= total)) level = "error";
+  else if ((daysLeft !== null && daysLeft < 3) || ratio >= 0.9) level = "warning";
+  return { used, total, ratio, expire, daysLeft, level };
 }
 
 // Remnawave помечает истёкшую или отключённую подписку служебными VLESS-

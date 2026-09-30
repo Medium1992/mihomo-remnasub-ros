@@ -1,11 +1,20 @@
 #!/bin/sh
 . /www/cgi-bin/_remna.sh
 
+# Опрашивается вебкой раз в несколько секунд, поэтому форков здесь минимум:
+# журнал событий отдаёт remna-config по запросу, а сеть описывает
+# network.info, который пишет 10-network-alpine.sh при применении настроек.
 profile_load "$PROFILE"
 meta_load "$META"
 UI_STATE= UI_UPDATED_EPOCH= UI_MESSAGE_B64= UI_SOURCE_B64=
 conf_load UI_ "$UI_STATUS"
 : "${UI_STATE:=idle}" "${UI_UPDATED_EPOCH:=0}"
+NET_IFACE= NET_CIDR= NET_TCP_CC_AVAILABLE=
+SYSCTL_TCP_NOTSENT_LOWAT= SYSCTL_TCP_SLOW_START_AFTER_IDLE= SYSCTL_TCP_MTU_PROBING=
+SYSCTL_TCP_FIN_TIMEOUT= SYSCTL_TCP_CONGESTION= SYSCTL_TCP_BUFFER_RMEM= SYSCTL_TCP_BUFFER_WMEM=
+conf_load "" "$RUNTIME_DIR/network.info"
+CORE_STATE= CORE_PROFILE_ID= CORE_EXIT_CODE= CORE_FAST_FAILS= CORE_RETRY_IN= CORE_UPDATED_EPOCH= CORE_REASON_B64=
+conf_load CORE_ "$RUNTIME_DIR/core.status"
 
 json_headers
 source_present=false; [ -s "$SOURCE" ] && source_present=true
@@ -14,9 +23,16 @@ configured=false; [ -n "$P_SUB_URL_B64" ] && configured=true
 nft_available=false; grep -q '^nf_tables ' /proc/modules 2>/dev/null && nft_available=true
 if [ "$nft_available" = true ]; then firewall_backend=nftables; else firewall_backend=iptables-legacy; fi
 
-active_network_interface=$(ip -4 route show default 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')
-[ -n "$active_network_interface" ] || active_network_interface=$(ip -o link show up | awk -F': ' '/link\/ether/ {gsub(/@.*$/, "", $2); if ($2 != "lo" && $2 != "Meta" && $2 !~ /^hs5t/) {print $2; exit}}')
-active_network_cidr=$(ip -4 -o addr show dev "$active_network_interface" scope global 2>/dev/null | awk '{print $4; exit}')
+# Значения из файлов уходят в JSON голыми строками — пропускаем только
+# безопасные символы. Проверка на месте: $(...) стоил бы форк на поле.
+case "$NET_IFACE" in *[!A-Za-z0-9@._-]*) NET_IFACE= ;; esac
+case "$NET_CIDR" in *[!0-9./]*) NET_CIDR= ;; esac
+case "$NET_TCP_CC_AVAILABLE" in *[!a-z0-9_\ ]*) NET_TCP_CC_AVAILABLE= ;; esac
+for sysctl_name in SYSCTL_TCP_NOTSENT_LOWAT SYSCTL_TCP_SLOW_START_AFTER_IDLE SYSCTL_TCP_MTU_PROBING \
+  SYSCTL_TCP_FIN_TIMEOUT SYSCTL_TCP_CONGESTION SYSCTL_TCP_BUFFER_RMEM SYSCTL_TCP_BUFFER_WMEM; do
+  eval "sysctl_value=\${$sysctl_name:-}"
+  case "$sysctl_value" in applied|system|readonly|missing|unavailable) ;; *) eval "$sysctl_name=" ;; esac
+done
 
 external_ui_present=false; [ -s "$UI_DIR/index.html" ] && external_ui_present=true
 external_ui_mtime=$(stat -c '%Y' "$UI_DIR/index.html" 2>/dev/null || printf '0')
@@ -31,15 +47,21 @@ mihomo_running=false
 if [ "$process_running" = true ] && [ "$configured" = true ] && [ "$final_present" = true ] && [ "$ST_RUN_ENABLED" = 1 ]; then
   mihomo_running=true
 fi
+case "$CORE_STATE" in running|crashed|stopped) ;; *) CORE_STATE=stopped ;; esac
+valid_number "$CORE_FAST_FAILS" || CORE_FAST_FAILS=0
+valid_number "$CORE_RETRY_IN" || CORE_RETRY_IN=0
+valid_number "$CORE_UPDATED_EPOCH" || CORE_UPDATED_EPOCH=0
+case "$CORE_EXIT_CODE" in ''|*[!0-9]*) CORE_EXIT_CODE=0 ;; esac
 
 profile_count=0
 for profile in "$PROFILES_DIR"/p-*.conf; do [ -f "$profile" ] && profile_count=$((profile_count + 1)); done
 error_b64=$(b64 "$(cat "$ERROR_FILE" 2>/dev/null || true)")
-meta_b64=$(b64 "$(cat "$META" 2>/dev/null || true)")
 final_mtime=$(stat -c '%Y' "$FINAL" 2>/dev/null || printf '0')
 valid_number "$final_mtime" || final_mtime=0
-final_version=$(cat "$STATUS_DIR/$active_profile_id.version" 2>/dev/null || printf '0')
+final_version=0
+[ ! -f "$STATUS_DIR/$active_profile_id.version" ] || read -r final_version < "$STATUS_DIR/$active_profile_id.version"
 valid_number "$final_version" || final_version=0
+previous_present=false; [ -s "$RUNTIME_DIR/$active_profile_id.config.previous.yaml" ] && previous_present=true
 
 status_load "$active_profile_id"
 refresh_state="$S_STATE"
@@ -49,7 +71,11 @@ using_previous_config=false
 if [ "$final_present" = true ] && { [ "$M_configuration_valid" = 0 ] || [ "$refresh_state" = error ]; }; then
   using_previous_config=true
 fi
-event_log_b64=$(b64 "$(tail -n 200 "$EVENT_LOG" 2>/dev/null || true)")
 
-printf '{"ok":true,"configured":%s,"source_present":%s,"final_present":%s,"final_mtime":%s,"final_version":%s,"configuration_valid":"%s","using_previous_config":%s,"mihomo_running":%s,"mihomo_process_running":%s,"run_enabled":%s,"nft_available":%s,"firewall_backend":"%s","active_network_interface_b64":"%s","active_network_cidr_b64":"%s","external_ui_present":%s,"external_ui_mtime":%s,"external_ui_state":"%s","external_ui_message_b64":"%s","external_ui_updated_at":%s,"active_profile_id":"%s","profile_count":%s,"refresh_state":"%s","refresh_stage":"%s","error_b64":"%s","meta_b64":"%s","event_log_b64":"%s"}\n' \
-  "$configured" "$source_present" "$final_present" "$final_mtime" "$final_version" "$M_configuration_valid" "$using_previous_config" "$mihomo_running" "$process_running" "$ST_RUN_ENABLED" "$nft_available" "$firewall_backend" "$(b64 "$active_network_interface")" "$(b64 "$active_network_cidr")" "$external_ui_present" "$external_ui_mtime" "$UI_STATE" "$UI_MESSAGE_B64" "$UI_UPDATED_EPOCH" "$active_profile_id" "$profile_count" "$refresh_state" "$refresh_stage" "$error_b64" "$meta_b64" "$event_log_b64"
+printf '{"ok":true,"configured":%s,"source_present":%s,"final_present":%s,"final_mtime":%s,"final_version":%s,"previous_config_present":%s,"configuration_valid":"%s","using_previous_config":%s,"mihomo_running":%s,"mihomo_process_running":%s,"run_enabled":%s,"core_state":"%s","core_exit_code":%s,"core_fast_fails":%s,"core_retry_in":%s,"core_updated_at":%s,"core_reason_b64":"%s","nft_available":%s,"firewall_backend":"%s","active_network_interface_b64":"%s","active_network_cidr_b64":"%s","tcp_congestion_available":"%s","sysctl":{"notsent_lowat":"%s","slow_start_after_idle":"%s","mtu_probing":"%s","fin_timeout":"%s","congestion":"%s","buffer_rmem":"%s","buffer_wmem":"%s"},"external_ui_present":%s,"external_ui_mtime":%s,"external_ui_state":"%s","external_ui_message_b64":"%s","external_ui_updated_at":%s,"active_profile_id":"%s","profile_count":%s,"refresh_state":"%s","refresh_stage":"%s","error_b64":"%s"}\n' \
+  "$configured" "$source_present" "$final_present" "$final_mtime" "$final_version" "$previous_present" "$M_configuration_valid" "$using_previous_config" "$mihomo_running" "$process_running" "$ST_RUN_ENABLED" \
+  "$CORE_STATE" "$CORE_EXIT_CODE" "$CORE_FAST_FAILS" "$CORE_RETRY_IN" "$CORE_UPDATED_EPOCH" "$CORE_REASON_B64" \
+  "$nft_available" "$firewall_backend" "$(b64 "$NET_IFACE")" "$(b64 "$NET_CIDR")" "$NET_TCP_CC_AVAILABLE" \
+  "$SYSCTL_TCP_NOTSENT_LOWAT" "$SYSCTL_TCP_SLOW_START_AFTER_IDLE" "$SYSCTL_TCP_MTU_PROBING" \
+  "$SYSCTL_TCP_FIN_TIMEOUT" "$SYSCTL_TCP_CONGESTION" "$SYSCTL_TCP_BUFFER_RMEM" "$SYSCTL_TCP_BUFFER_WMEM" \
+  "$external_ui_present" "$external_ui_mtime" "$UI_STATE" "$UI_MESSAGE_B64" "$UI_UPDATED_EPOCH" "$active_profile_id" "$profile_count" "$refresh_state" "$refresh_stage" "$error_b64"

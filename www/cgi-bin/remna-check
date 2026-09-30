@@ -1,0 +1,114 @@
+#!/bin/sh
+# Проверка оверрайдов без сохранения. Сборку делает воркер entrypoint'а тем
+# же конвейером, что и для рабочего конфига, поэтому здесь только очередь.
+#   POST profile_id, scope=global|profile, поля оверрайда  ->  { ok, token }
+#   GET  ?token=c-...                                        ->  { ok, state, message_b64, validation_b64 }
+#   GET  ?token=c-...&yaml=1                                 ->  итоговый YAML проверки
+. /www/cgi-bin/_remna.sh
+CHECKS_DIR="$RUNTIME_DIR/checks"
+mkdir -p "$CHECKS_DIR"
+
+valid_token() {
+  case "${1#c-}" in ''|*[!0-9-]*) return 1 ;; esac
+  case "$1" in c-*) return 0 ;; esac
+  return 1
+}
+
+if [ "${REQUEST_METHOD:-GET}" = GET ]; then
+  token= yaml=
+  old_ifs=$IFS
+  IFS='&'
+  for pair in ${QUERY_STRING:-}; do
+    case "$pair" in
+      token=*) token=${pair#token=} ;;
+      yaml=1) yaml=1 ;;
+    esac
+  done
+  IFS=$old_ifs
+  valid_token "$token" || deny 'invalid check token'
+  if [ "$yaml" = 1 ]; then
+    text_headers
+    cat "$CHECKS_DIR/$token.yaml" 2>/dev/null
+    exit 0
+  fi
+  C_STATE= C_MESSAGE_B64= C_VALIDATION_B64=
+  if [ -f "$CHECKS_DIR/$token.request" ]; then
+    C_STATE=queued
+  else
+    conf_load C_ "$CHECKS_DIR/$token.result"
+  fi
+  case "$C_STATE" in queued|running|ok|error) ;; *) deny 'Проверка не найдена или устарела' ;; esac
+  json_headers
+  printf '{"ok":true,"state":"%s","message_b64":"%s","validation_b64":"%s"}\n' "$C_STATE" "$C_MESSAGE_B64" "$C_VALIDATION_B64"
+  exit 0
+fi
+
+require_post
+load_form
+scope=$(form_value scope)
+profile_id=$(form_value profile_id)
+[ -n "$profile_id" ] || profile_id="${ST_ACTIVE_PROFILE_ID:-$ACTIVE_PROFILE_ID}"
+profile_file "$profile_id" >/dev/null || deny 'invalid profile id'
+[ -f "$PROFILES_DIR/$profile_id.conf" ] || deny 'Сначала сохраните подписку'
+[ -s "$PROFILES_DIR/$profile_id.source.yaml" ] || deny 'У подписки ещё нет загруженного YAML, проверять не на чем'
+
+# Результат в OVERRIDE_TEXT: deny внутри $(...) завершил бы только
+# подоболочку, и текст ошибки уехал бы в оверрайд.
+check_override() {
+  OVERRIDE_TEXT=$(printf '%s' "$1" | tr -d '\r')
+  [ "${#OVERRIDE_TEXT}" -le 32768 ] || deny 'Оверрайд слишком большой (максимум 32 КиБ)'
+  case "$(override_first_problem "$OVERRIDE_TEXT")" in
+    list) deny 'Список на верхнем уровне. Элементы списка должны быть с отступом под своим ключом' ;;
+    tab) deny 'Табы в отступах, YAML их не допускает' ;;
+    merge-inline) deny 'Элементы prepend-/append- пишутся списком с новой строки, а не в [...]' ;;
+  esac
+}
+
+token="c-$(date +%s)-$$"
+request_tmp="$CHECKS_DIR/$token.request.tmp"
+umask 077
+case "$scope" in
+  global)
+    check_override "$(form_value global_override)"
+    {
+      printf 'PROFILE_ID=%s\n' "$profile_id"
+      printf 'GLOBAL_OVERRIDE_B64=%s\n' "$(b64 "$OVERRIDE_TEXT")"
+    } > "$request_tmp"
+    ;;
+  profile)
+    check_override "$(form_value local_override)"
+    local_override=$OVERRIDE_TEXT
+    local_override_enabled=$(form_value local_override_enabled)
+    local_mode=$(form_value local_mode)
+    local_find_process_mode=$(form_value local_find_process_mode)
+    local_log_level=$(form_value local_log_level)
+    local_ipv6=$(form_value local_ipv6)
+    local_store_selected=$(form_value local_store_selected)
+    local_store_fake_ip=$(form_value local_store_fake_ip)
+    local_sniffer_mode=$(form_value local_sniffer_mode)
+    case "$local_override_enabled" in 0|1) ;; *) deny 'invalid local override switch' ;; esac
+    case "$local_mode" in inherit|source|rule|global|direct) ;; *) deny 'invalid local mode' ;; esac
+    case "$local_find_process_mode" in inherit|off|strict|always) ;; *) deny 'invalid local find-process-mode' ;; esac
+    case "$local_log_level" in inherit|silent|error|warning|info|debug) ;; *) deny 'invalid local log-level' ;; esac
+    for local_switch in "$local_ipv6" "$local_store_selected" "$local_store_fake_ip"; do
+      case "$local_switch" in inherit|0|1) ;; *) deny 'invalid local switch' ;; esac
+    done
+    case "$local_sniffer_mode" in inherit|source|disabled) ;; *) deny 'invalid local sniffer mode' ;; esac
+    {
+      printf 'PROFILE_ID=%s\n' "$profile_id"
+      printf 'LOCAL_OVERRIDE_ENABLED=%s\n' "$local_override_enabled"
+      printf 'LOCAL_OVERRIDE_B64=%s\n' "$(b64 "$local_override")"
+      printf 'LOCAL_MODE=%s\n' "$local_mode"
+      printf 'LOCAL_FIND_PROCESS_MODE=%s\n' "$local_find_process_mode"
+      printf 'LOCAL_LOG_LEVEL=%s\n' "$local_log_level"
+      printf 'LOCAL_IPV6=%s\n' "$local_ipv6"
+      printf 'LOCAL_STORE_SELECTED=%s\n' "$local_store_selected"
+      printf 'LOCAL_STORE_FAKE_IP=%s\n' "$local_store_fake_ip"
+      printf 'LOCAL_SNIFFER_MODE=%s\n' "$local_sniffer_mode"
+    } > "$request_tmp"
+    ;;
+  *) deny 'invalid check scope' ;;
+esac
+mv "$request_tmp" "$CHECKS_DIR/$token.request"
+json_headers
+printf '{"ok":true,"token":"%s","profile_id":"%s"}\n' "$token" "$profile_id"

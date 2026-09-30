@@ -103,5 +103,100 @@ normalize_rule local 0
 normalize_rule main 32766
 normalize_rule default 32767
 
+# ── TCP-тюнинг ───────────────────────────────────────────────
+# Контейнер живёт в своём netns: часть net.ipv4.tcp_* там своя и пишется,
+# часть (nf_conntrack_max, net.core.rmem_max) принадлежит RouterOS и
+# доступна только на чтение или не видна вовсе. Поэтому каждое значение
+# пишется отдельно, перечитывается и получает статус для веб-панели.
+# Исходные значения ядра запоминаются при старте контейнера: system значит
+# вернуть их, а не «оставить то, что выставили раньше».
+sysctl_path() { printf '/proc/sys/%s' "$(printf '%s' "$1" | tr . /)"; }
+
+if [ -n "$NETWORK_SYSCTL_ORIGINAL_FILE" ] && [ ! -f "$NETWORK_SYSCTL_ORIGINAL_FILE" ]; then
+  for name in net.ipv4.tcp_notsent_lowat net.ipv4.tcp_slow_start_after_idle net.ipv4.tcp_mtu_probing \
+              net.ipv4.tcp_fin_timeout net.ipv4.tcp_congestion_control net.ipv4.tcp_rmem net.ipv4.tcp_wmem; do
+    path=$(sysctl_path "$name")
+    [ -r "$path" ] || continue
+    printf '%s=%s\n' "$name" "$(tr -s '\t ' '  ' < "$path")"
+  done > "$NETWORK_SYSCTL_ORIGINAL_FILE.tmp" && mv "$NETWORK_SYSCTL_ORIGINAL_FILE.tmp" "$NETWORK_SYSCTL_ORIGINAL_FILE"
+fi
+
+sysctl_original() {
+  [ -n "$NETWORK_SYSCTL_ORIGINAL_FILE" ] || return 1
+  awk -v key="$1" 'index($0, key "=") == 1 { print substr($0, length(key) + 2); found=1; exit } END { exit !found }' "$NETWORK_SYSCTL_ORIGINAL_FILE" 2>/dev/null
+}
+
+SYSCTL_REPORT=
+# Статусы: applied, system, readonly, missing, unavailable.
+sysctl_apply() {
+  label="$1" name="$2" wanted="$3"
+  path=$(sysctl_path "$name")
+  if [ ! -e "$path" ]; then
+    SYSCTL_REPORT="${SYSCTL_REPORT}SYSCTL_$label=missing
+"
+    return 0
+  fi
+  result=applied
+  if [ "$wanted" = system ]; then
+    wanted=$(sysctl_original "$name") || wanted=
+    result=system
+    [ -n "$wanted" ] || { SYSCTL_REPORT="${SYSCTL_REPORT}SYSCTL_$label=system
+"; return 0; }
+  fi
+  printf '%s\n' "$wanted" > "$path" 2>/dev/null || true
+  current=$(tr -s '\t ' '  ' < "$path" 2>/dev/null)
+  [ "$current" = "$wanted" ] || result=readonly
+  SYSCTL_REPORT="${SYSCTL_REPORT}SYSCTL_$label=$result
+"
+}
+
+sysctl_apply TCP_NOTSENT_LOWAT net.ipv4.tcp_notsent_lowat "${NETWORK_TCP_NOTSENT_LOWAT:-system}"
+sysctl_apply TCP_SLOW_START_AFTER_IDLE net.ipv4.tcp_slow_start_after_idle "${NETWORK_TCP_SLOW_START_AFTER_IDLE:-system}"
+sysctl_apply TCP_MTU_PROBING net.ipv4.tcp_mtu_probing "${NETWORK_TCP_MTU_PROBING:-system}"
+sysctl_apply TCP_FIN_TIMEOUT net.ipv4.tcp_fin_timeout "${NETWORK_TCP_FIN_TIMEOUT:-system}"
+
+cc_available=$(tr -cd 'a-z0-9_ ' < /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null)
+cc_wanted=${NETWORK_TCP_CONGESTION:-system}
+if [ "$cc_wanted" != system ] && ! printf ' %s ' "$cc_available" | grep -q " $cc_wanted "; then
+  SYSCTL_REPORT="${SYSCTL_REPORT}SYSCTL_TCP_CONGESTION=unavailable
+"
+else
+  sysctl_apply TCP_CONGESTION net.ipv4.tcp_congestion_control "$cc_wanted"
+fi
+
+# Потолок буфера сокета: третье поле tcp_rmem/tcp_wmem. Первые два берутся
+# из исходных значений ядра, чтобы не трогать минимум и значение по умолчанию.
+buffer_max=${NETWORK_TCP_BUFFER_MAX:-system}
+for buffer_sysctl in tcp_rmem tcp_wmem; do
+  label=TCP_BUFFER_$(printf '%s' "$buffer_sysctl" | tr a-z A-Z | sed 's/^TCP_//')
+  if [ "$buffer_max" = system ]; then
+    sysctl_apply "$label" "net.ipv4.$buffer_sysctl" system
+    continue
+  fi
+  original=$(sysctl_original "net.ipv4.$buffer_sysctl") || original=$(tr -s '\t ' '  ' < "/proc/sys/net/ipv4/$buffer_sysctl" 2>/dev/null)
+  set -- $original
+  if [ $# -ne 3 ]; then
+    SYSCTL_REPORT="${SYSCTL_REPORT}SYSCTL_$label=missing
+"
+    continue
+  fi
+  buffer_default=$2
+  [ "$buffer_default" -le "$buffer_max" ] || buffer_default=$buffer_max
+  sysctl_apply "$label" "net.ipv4.$buffer_sysctl" "$1 $buffer_default $buffer_max"
+done
+
+# Сводка для веб-панели: CGI читает её встроенным read, без ip и awk на
+# каждый опрос. Интерфейс и адрес снимаются тут же.
+if [ -n "${NETWORK_INFO_FILE:-}" ]; then
+  iface_cidr=$(ip -4 -o addr show dev "$iface" scope global 2>/dev/null | awk '{print $4; exit}')
+  {
+    printf 'NET_IFACE=%s\n' "$(printf '%s' "$iface" | tr -cd 'A-Za-z0-9@._-')"
+    printf 'NET_CIDR=%s\n' "$(printf '%s' "$iface_cidr" | tr -cd '0-9./')"
+    printf 'NET_TCP_CC_AVAILABLE=%s\n' "$cc_available"
+    printf '%s' "$SYSCTL_REPORT"
+  } > "$NETWORK_INFO_FILE.tmp" && mv "$NETWORK_INFO_FILE.tmp" "$NETWORK_INFO_FILE"
+fi
+
 # Default route уже корректно создаётся RouterOS. Трогать его во время работы нельзя.
 echo "[net] interface=$iface ipv6_disabled=$NETWORK_DISABLE_IPV6 qdisc=$NETWORK_QDISC multicast_disabled=$NETWORK_DISABLE_MULTICAST"
+printf '%s' "$SYSCTL_REPORT" | sed 's/^SYSCTL_/[net] sysctl /'

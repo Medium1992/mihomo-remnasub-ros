@@ -1,11 +1,14 @@
 // Модалка настроек одной подписки.
-import { $, all, toast, showPage } from "./dom.js";
+import { $, all, toast, showPage, confirmDialog } from "./dom.js";
 import { decode } from "./codec.js";
 import { send, requestJson } from "./api.js";
 import { formatBytes, formatInterval, parseSubscriptionUserinfo, safeHttpUrl } from "./format.js";
 import { renderHeaders, serializedHeaders } from "./headers.js";
 import { load, schedulePoll } from "./refresh.js";
-import { ui, profileById, profileName, profileLocalName } from "./store.js";
+import { store, ui, profileById, profileName, profileLocalName } from "./store.js";
+import { runCheck } from "./checks.js";
+
+let providerRefreshSeconds = 0;
 
 // Блок с тем, что прислал сам провайдер подписки в заголовках ответа.
 function renderProviderMetadata(profile) {
@@ -41,6 +44,16 @@ function renderProviderMetadata(profile) {
   $("profile-provider-page").parentElement.classList.toggle("hidden", !pageUrl && !supportUrl);
 }
 
+// Пока сервер сам задаёт интервал, своё значение — только запасное: поле
+// гаснет, а подсказка показывает, что действует на самом деле.
+export function updateRefreshField() {
+  const provider = $("profile-use-provider-interval").checked && providerRefreshSeconds > 0;
+  $("profile-refresh").disabled = provider;
+  $("profile-refresh-hint").textContent = provider
+    ? `Сейчас действует интервал сервера: ${formatInterval(providerRefreshSeconds)}`
+    : $("profile-use-provider-interval").checked ? "Сервер интервал не прислал — действует это значение" : "";
+}
+
 export function updateLocalOverrideState(openOnEnable = false) {
   const enabled = $("profile-local-override-enabled").checked;
   const details = $("profile-local-details");
@@ -52,6 +65,21 @@ export function updateLocalOverrideState(openOnEnable = false) {
   if (enabled && openOnEnable) details.open = true;
 }
 
+// Какие ключи локального YAML сейчас перекроет контейнер: общие настройки
+// плюс то, что в этом профиле выбрано поверх них.
+export function profileOverrideContext() {
+  const state = store.model.state;
+  const localMode = $("profile-local-mode").value;
+  const localSniffer = $("profile-local-sniffer").value;
+  const mode = localMode === "inherit" ? (state.mihomo_mode || "source") : localMode;
+  return {
+    mode: mode !== "source",
+    sniffer: localSniffer === "disabled" || (localSniffer === "inherit" && Boolean(state.mihomo_sniffer_override)),
+    stripSocks: Boolean(state.inbound_strip_socks ?? 1),
+    stripHttp: Boolean(state.inbound_strip_http ?? 1),
+    stripMixed: Boolean(state.inbound_strip_mixed ?? 1)
+  };
+}
 
 // Публичный ключ показывается только сразу после генерации: он не хранится,
 // потому что нужен один раз — вставить в правило ответов панели.
@@ -84,10 +112,29 @@ export async function generateAgeKeypair() {
   }
 }
 
+// Снимок формы для проверки несохранённых правок: сравнивается то же, что
+// уходит на сервер, поэтому смена вкладок и раскрытие блоков правкой не
+// считаются.
+function editorSnapshot() {
+  try { return JSON.stringify(collectFields()); }
+  catch (_) { return `invalid:${Date.now()}`; }
+}
+
+function rememberSnapshot() {
+  ui.editorSnapshot = editorSnapshot();
+}
+
+export function editorDirty() {
+  return !$("profile-modal-layer").classList.contains("hidden")
+    && !document.querySelector(".profile-modal").classList.contains("loading")
+    && editorSnapshot() !== ui.editorSnapshot;
+}
+
 export function createProfile() {
   showPage("subscriptions");
   ui.editorRequestToken += 1;
   ui.editorProfileId = "";
+  providerRefreshSeconds = 0;
   document.querySelector(".profile-modal").classList.remove("loading");
   $("profile-id").value = "";
   $("editor-title").textContent = "Новая подписка";
@@ -110,9 +157,13 @@ export function createProfile() {
   $("profile-local-sniffer").value = "inherit";
   $("profile-local-mode").value = "inherit";
   $("profile-override").value = "";
+  $("profile-override").dispatchEvent(new Event("input"));
   $("profile-local-details").open = false;
+  $("check-profile-override").disabled = true;
   updateLocalOverrideState();
+  updateRefreshField();
   $("profile-modal-layer").classList.remove("hidden");
+  rememberSnapshot();
   $("profile-name").focus();
 }
 
@@ -126,6 +177,7 @@ function populateEditor(profile) {
   $("profile-use-provider-title").checked = Boolean(profile.use_provider_title);
   $("profile-use-provider-interval").checked = Boolean(profile.use_provider_interval);
   $("profile-insecure").checked = Boolean(profile.insecure_tls);
+  providerRefreshSeconds = Number(profile.provider_refresh_seconds || 0);
   renderProviderMetadata(profile);
   setAgeKey(decode(profile.age_key_b64));
   $("profile-local-override-enabled").checked = Boolean(profile.local_override_enabled);
@@ -138,8 +190,12 @@ function populateEditor(profile) {
   $("profile-local-sniffer").value = profile.local_sniffer_mode || "inherit";
   $("profile-local-mode").value = profile.local_mode || "inherit";
   $("profile-override").value = decode(profile.local_override_b64);
+  $("profile-override").dispatchEvent(new Event("input"));
   $("profile-local-details").open = false;
   updateLocalOverrideState();
+  $("check-profile-override").disabled = !profile.source_present;
+  $("check-profile-override").title = profile.source_present ? "Собрать конфиг с этим YAML и прогнать mihomo -t, ничего не сохраняя" : "Сначала загрузите подписку";
+  updateRefreshField();
 }
 
 // Токен запроса отсекает ответ по профилю, который пользователь уже закрыл
@@ -156,6 +212,7 @@ export async function openEditor(profileId) {
     if (requestToken !== ui.editorRequestToken || ui.editorProfileId !== profileId) return;
     populateEditor(details.profile);
     document.querySelector(".profile-modal").classList.remove("loading");
+    rememberSnapshot();
     $("profile-name").focus();
   } catch (error) {
     if (requestToken === ui.editorRequestToken) closeEditor();
@@ -166,13 +223,27 @@ export async function openEditor(profileId) {
 export function closeEditor() {
   ui.editorRequestToken += 1;
   ui.editorProfileId = "";
+  ui.editorSnapshot = "";
   document.querySelector(".profile-modal").classList.remove("loading");
   $("profile-modal-layer").classList.add("hidden");
 }
 
-export async function saveProfile(event) {
-  event.preventDefault();
-  const fields = {
+// Esc, крестик, «Отмена» и клик мимо окна не должны молча выбрасывать правки.
+export async function requestCloseEditor() {
+  if (editorDirty()) {
+    const discard = await confirmDialog({
+      title: "Закрыть без сохранения?",
+      message: "В настройках подписки есть несохранённые изменения. Они будут потеряны.",
+      accept: "Закрыть",
+      danger: true
+    });
+    if (!discard) return;
+  }
+  closeEditor();
+}
+
+function collectFields() {
+  return {
     profile_id: $("profile-id").value,
     name: $("profile-name").value.trim(),
     url: $("profile-url").value.trim(),
@@ -193,6 +264,29 @@ export async function saveProfile(event) {
     insecure_tls: $("profile-insecure").checked ? "1" : "0",
     age_key: $("profile-age-key").value.trim()
   };
+}
+
+export async function checkProfileOverride() {
+  const fields = collectFields();
+  if (!fields.profile_id) throw new Error("Сначала сохраните подписку");
+  await runCheck({
+    scope: "profile",
+    profile_id: fields.profile_id,
+    local_override_enabled: fields.local_override_enabled,
+    local_override: fields.local_override,
+    local_mode: fields.local_mode,
+    local_find_process_mode: fields.local_find_process_mode,
+    local_log_level: fields.local_log_level,
+    local_ipv6: fields.local_ipv6,
+    local_store_selected: fields.local_store_selected,
+    local_store_fake_ip: fields.local_store_fake_ip,
+    local_sniffer_mode: fields.local_sniffer_mode
+  }, `Проверка · ${fields.name || fields.profile_id}`);
+}
+
+export async function saveProfile(event) {
+  event.preventDefault();
+  const fields = collectFields();
   let created = "";
   if (!fields.profile_id) {
     const result = await send({ action: "create", name: fields.name });

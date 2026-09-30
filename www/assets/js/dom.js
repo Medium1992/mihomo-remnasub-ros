@@ -29,6 +29,29 @@ export function protectedAction(handler) {
   };
 }
 
+// Одно окно подтверждения на всё приложение. Новый вопрос отменяет
+// предыдущий, если тот так и не получил ответа.
+let confirmResolve = null;
+
+export function confirmDialog({ title, message, accept = "Продолжить", danger = false }) {
+  if (confirmResolve) settleConfirm(false);
+  $("confirm-title").textContent = title;
+  $("confirm-message").textContent = message;
+  $("confirm-accept").textContent = accept;
+  $("confirm-accept").className = danger ? "danger-button" : "primary-button";
+  $("confirm-icon").classList.toggle("neutral", !danger);
+  $("confirm-modal").classList.remove("hidden");
+  $("confirm-accept").focus();
+  return new Promise((resolve) => { confirmResolve = resolve; });
+}
+
+export function settleConfirm(result) {
+  const resolve = confirmResolve;
+  confirmResolve = null;
+  $("confirm-modal").classList.add("hidden");
+  if (resolve) resolve(result);
+}
+
 export function showPage(pageName) {
   all("[data-page-link]").forEach((button) => button.classList.toggle("active", button.dataset.pageLink === pageName));
   all("[data-page]").forEach((page) => page.classList.toggle("active", page.dataset.page === pageName));
@@ -38,5 +61,5 @@ export function showPage(pageName) {
 export function selectSettingsTab(tabName) {
   all("[data-settings-tab]").forEach((tab) => tab.classList.toggle("active", tab.dataset.settingsTab === tabName));
   all("[data-settings-panel]").forEach((panel) => panel.classList.toggle("active", panel.dataset.settingsPanel === tabName));
-  $("save-settings").classList.toggle("hidden", tabName === "access");
+  $("save-settings").classList.toggle("hidden", tabName === "access" || tabName === "backup");
 }

@@ -172,6 +172,7 @@ override_first_problem() {
   printf '%s\n' "${1:-}" | awk '
     /^-[[:space:]]/ { print "list"; exit }
     /^[[:space:]]*\t/ { print "tab"; exit }
+    /^(prepend|append)-[A-Za-z0-9_-]+:[[:space:]]*[^[:space:]#]/ { print "merge-inline"; exit }
   '
 }
 
@@ -187,6 +188,30 @@ valid_age_key() {
     ''|*[!A-Z0-9-]*) return 1 ;;
     *) return 0 ;;
   esac
+}
+
+# notsent_lowat, slow_start_after_idle, mtu_probing, fin_timeout,
+# congestion_control, потолок буфера. system — значение ядра на старте.
+valid_tcp_tuning() {
+  case "$1" in
+    system) ;;
+    *) valid_number "$1" && [ "$1" -ge 4096 ] && [ "$1" -le 67108864 ] || return 1 ;;
+  esac
+  case "$2" in system|0|1) ;; *) return 1 ;; esac
+  case "$3" in system|0|1|2) ;; *) return 1 ;; esac
+  case "$4" in
+    system) ;;
+    *) valid_number "$4" && [ "$4" -ge 5 ] && [ "$4" -le 120 ] || return 1 ;;
+  esac
+  case "$5" in ''|*[!a-z0-9_]*) return 1 ;; esac
+  case "$6" in system|1048576|2097152|4194304|8388608|16777216) ;; *) return 1 ;; esac
+}
+
+# Порты, которые в контейнере заняты всегда: DNS ядра, веб-панель и
+# контроллер Mihomo.
+reserved_port() {
+  case "$1" in 53|80|9090) return 0 ;; esac
+  return 1
 }
 
 valid_profile_id() {
@@ -227,6 +252,8 @@ state_load() {
   ST_NETWORK_CT_LAST_ACK= ST_NETWORK_CT_TIME_WAIT= ST_NETWORK_CT_CLOSE=
   ST_NETWORK_CT_UNACKNOWLEDGED= ST_NETWORK_CT_UDP_STREAM=
   ST_WEB_THEME= ST_WEB_ACCENT=
+  ST_NETWORK_TCP_NOTSENT_LOWAT= ST_NETWORK_TCP_SLOW_START_AFTER_IDLE= ST_NETWORK_TCP_MTU_PROBING=
+  ST_NETWORK_TCP_FIN_TIMEOUT= ST_NETWORK_TCP_CONGESTION= ST_NETWORK_TCP_BUFFER_MAX=
   conf_load ST_ "$STATE"
   : "${ST_RUN_ENABLED:=0}" "${ST_LISTENER_MODE:=auto}"
   : "${ST_REDIR_PORT:=12345}" "${ST_TPROXY_PORT:=12346}"
@@ -257,6 +284,14 @@ state_load() {
   : "${ST_NETWORK_CT_CLOSE_WAIT:=10}" "${ST_NETWORK_CT_LAST_ACK:=10}"
   : "${ST_NETWORK_CT_TIME_WAIT:=10}" "${ST_NETWORK_CT_CLOSE:=10}"
   : "${ST_NETWORK_CT_UNACKNOWLEDGED:=300}" "${ST_NETWORK_CT_UDP_STREAM:=180}"
+  : "${ST_NETWORK_TCP_NOTSENT_LOWAT:=131072}" "${ST_NETWORK_TCP_SLOW_START_AFTER_IDLE:=0}"
+  : "${ST_NETWORK_TCP_MTU_PROBING:=1}" "${ST_NETWORK_TCP_FIN_TIMEOUT:=30}"
+  : "${ST_NETWORK_TCP_CONGESTION:=system}" "${ST_NETWORK_TCP_BUFFER_MAX:=system}"
+  valid_tcp_tuning "$ST_NETWORK_TCP_NOTSENT_LOWAT" "$ST_NETWORK_TCP_SLOW_START_AFTER_IDLE" "$ST_NETWORK_TCP_MTU_PROBING" \
+    "$ST_NETWORK_TCP_FIN_TIMEOUT" "$ST_NETWORK_TCP_CONGESTION" "$ST_NETWORK_TCP_BUFFER_MAX" || {
+    ST_NETWORK_TCP_NOTSENT_LOWAT=131072 ST_NETWORK_TCP_SLOW_START_AFTER_IDLE=0 ST_NETWORK_TCP_MTU_PROBING=1
+    ST_NETWORK_TCP_FIN_TIMEOUT=30 ST_NETWORK_TCP_CONGESTION=system ST_NETWORK_TCP_BUFFER_MAX=system
+  }
   : "${ST_WEB_THEME:=auto}"
   case "$ST_WEB_THEME" in auto|dark|light|graphite|midnight|forest|sepia) ;; *) ST_WEB_THEME=auto ;; esac
   # Акцент отдаётся в JSON голой строкой, поэтому пропускаем только #rrggbb.
@@ -426,7 +461,9 @@ form_value() {
 
 load_form() {
   valid_number "${CONTENT_LENGTH:-0}" || deny 'invalid request length'
-  [ "${CONTENT_LENGTH:-0}" -le 65536 ] || deny 'request is too large'
+  # Оверрайд до 32 КиБ после URL-кодирования (переводы строк, двоеточия,
+  # кириллица по 6 байт) легко перерастает 64 КБ вместе с остальной формой.
+  [ "${CONTENT_LENGTH:-0}" -le 262144 ] || deny 'Запрос слишком большой (больше 256 КиБ)'
   FORM_BODY=$(head -c "${CONTENT_LENGTH:-0}")
 }
 

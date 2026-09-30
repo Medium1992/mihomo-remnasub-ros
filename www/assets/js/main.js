@@ -1,14 +1,15 @@
-import { $, all, showPage, selectSettingsTab, protectedAction, toast } from "./dom.js";
+import { $, all, showPage, selectSettingsTab, protectedAction, toast, settleConfirm } from "./dom.js";
 import { refreshRelativeTimes } from "./format.js";
 import { copyViewer, selectViewerContents } from "./yaml.js";
 import { headerRow } from "./headers.js";
-import { load, schedulePoll, pollDelay } from "./refresh.js";
+import { load, schedulePoll } from "./refresh.js";
 import { ui } from "./store.js";
 import { applyMirroredTheme, watchSystemTheme } from "./theme.js";
 import * as subscriptions from "./subscriptions.js";
 import * as editor from "./editor.js";
 import * as viewers from "./viewers.js";
 import * as settings from "./settings.js";
+import * as checks from "./checks.js";
 
 // Frame-buster. X-Frame-Options busybox httpd к статике не добавляет, а
 // frame-ancestors внутри <meta> CSP браузер игнорирует по спецификации. Без
@@ -25,6 +26,23 @@ if (window.top !== window.self) {
   try { window.top.location = window.self.location; } catch (_) {}
 } else {
   bootstrap();
+}
+
+// Как закрывается каждое окно. Порядок — от верхнего к нижнему: Esc и клик
+// мимо окна закрывают только самое верхнее из открытых.
+const MODAL_CLOSERS = [
+  ["confirm-modal", () => settleConfirm(false)],
+  ["check-modal", () => checks.closeCheck()],
+  ["delete-modal", () => subscriptions.closeDelete()],
+  ["runtime-events-modal", () => viewers.closeRuntimeEvents()],
+  ["runtime-yaml-modal", () => viewers.closeRuntimeYaml()],
+  ["source-yaml-modal", () => viewers.closeSourceYaml()],
+  ["profile-modal-layer", () => protectedAction(editor.requestCloseEditor)()]
+];
+
+function closeTopModal() {
+  const open = MODAL_CLOSERS.find(([id]) => !$(id).classList.contains("hidden"));
+  if (open) open[1]();
 }
 
 function bootstrap() {
@@ -78,32 +96,26 @@ function bootstrap() {
     if (button) {
       if (button.disabled) return;
       const profileId = button.dataset.profileId;
-      if (button.dataset.profileAction === "edit") await editor.openEditor(profileId);
-      if (button.dataset.profileAction === "refresh") await subscriptions.refreshProfile(profileId);
-      if (button.dataset.profileAction === "source") await viewers.openSourceYaml(profileId);
-      if (button.dataset.profileAction === "delete") subscriptions.askDelete(profileId);
-      if (button.dataset.profileAction === "start") await subscriptions.setRuntime("start", profileId);
-      if (button.dataset.profileAction === "stop") await subscriptions.setRuntime("stop", profileId);
+      const action = button.dataset.profileAction;
+      if (action === "edit") await editor.openEditor(profileId);
+      if (action === "refresh") await subscriptions.refreshProfile(profileId);
+      if (action === "source") await viewers.openSourceYaml(profileId);
+      if (action === "duplicate") await subscriptions.duplicateProfile(profileId);
+      if (action === "delete") subscriptions.askDelete(profileId);
+      if (action === "select") await subscriptions.selectProfile(profileId);
+      if (action === "start") await subscriptions.setRuntime("start", profileId);
+      if (action === "stop") await subscriptions.setRuntime("stop", profileId);
       return;
     }
-    if (event.target.closest("[data-profile-diagnostics]")) return;
+    if (event.target.closest("[data-profile-diagnostics], a")) return;
     const card = event.target.closest("[data-profile-row]");
     if (card) await subscriptions.selectProfile(card.dataset.profileRow);
   }));
-  $("subscription-list").addEventListener("keydown", protectedAction(async (event) => {
-    if (!["Enter", " "].includes(event.key) || event.target.closest("button, details")) return;
-    const card = event.target.closest("[data-profile-row]");
-    if (!card) return;
-    event.preventDefault();
-    await subscriptions.selectProfile(card.dataset.profileRow);
-  }));
 
-  $("settings-form").addEventListener("input", (event) => {
-    if (!event.target.closest('[data-settings-panel="access"]')) ui.settingsDirty = true;
-  });
-  $("settings-form").addEventListener("change", (event) => {
-    if (!event.target.closest('[data-settings-panel="access"]')) ui.settingsDirty = true;
-  });
+  // Правки на вкладках «Доступ» и «Резервная копия» в state.conf не пишутся.
+  const tracksSettings = (event) => !event.target.closest('[data-settings-panel="access"], [data-settings-panel="backup"]');
+  $("settings-form").addEventListener("input", (event) => { if (tracksSettings(event)) ui.settingsDirty = true; });
+  $("settings-form").addEventListener("change", (event) => { if (tracksSettings(event)) ui.settingsDirty = true; });
   $("add-global-header").addEventListener("click", () => {
     $("global-header-rows").insertAdjacentHTML("beforeend", headerRow({ key: "", value: "", required: false }));
     ui.settingsDirty = true;
@@ -127,6 +139,7 @@ function bootstrap() {
   });
 
   $("profile-local-override-enabled").addEventListener("change", () => editor.updateLocalOverrideState(true));
+  $("profile-use-provider-interval").addEventListener("change", editor.updateRefreshField);
   $("mihomo-sniffer-override").addEventListener("change", () => {
     settings.updateSnifferOverrideState(true);
     ui.settingsDirty = true;
@@ -134,23 +147,51 @@ function bootstrap() {
   $("mihomo-sniffer-enable").addEventListener("change", () => settings.updateSnifferOverrideState());
   settings.renderPresetButtons("global-override-presets", "global-override");
   settings.renderPresetButtons("profile-override-presets", "profile-override");
-  settings.watchOverrideProblems("global-override", "global-override-problem");
-  settings.watchOverrideProblems("profile-override", "profile-override-problem");
+  // Предупреждение о ключах, которые перекроет контейнер, зависит от
+  // переключателей рядом, поэтому пересчитывается и на их изменение.
+  const checkGlobalProblems = settings.watchOverrideProblems("global-override", "global-override-problem", settings.globalOverrideContext);
+  const checkProfileProblems = settings.watchOverrideProblems("profile-override", "profile-override-problem", editor.profileOverrideContext);
+  $("settings-form").addEventListener("change", checkGlobalProblems);
+  $("profile-form").addEventListener("change", checkProfileProblems);
+  $("check-global-override").addEventListener("click", protectedAction(settings.checkGlobalOverride));
+  $("check-profile-override").addEventListener("click", protectedAction(editor.checkProfileOverride));
+  $("check-toggle-yaml").addEventListener("click", protectedAction(checks.toggleCheckYaml));
+  $("close-check").addEventListener("click", checks.closeCheck);
+  $("done-check").addEventListener("click", checks.closeCheck);
+  $("copy-check").addEventListener("click", protectedAction(() => copyViewer("check-viewer", "Скопировано")));
+
   $("save-settings").addEventListener("click", protectedAction(settings.saveSettings));
   $("reset-network-timeouts").addEventListener("click", () => {
     Object.entries(settings.networkTimeoutDefaults).forEach(([id, value]) => { $(id).value = value; });
     ui.settingsDirty = true;
     toast("Таймауты возвращены к значениям RouterOS");
   });
+  $("reset-tcp-tuning").addEventListener("click", () => {
+    Object.entries(settings.tcpTuningDefaults).forEach(([id, value]) => { $(id).value = value; });
+    ui.settingsDirty = true;
+    toast("TCP-тюнинг возвращён к рекомендуемым значениям");
+  });
+
+  $("backup-download").addEventListener("click", protectedAction(settings.downloadBackup));
+  $("backup-restore").addEventListener("click", () => $("backup-file").click());
+  $("backup-file").addEventListener("change", protectedAction(async () => {
+    const file = $("backup-file").files[0];
+    $("backup-file").value = "";
+    await settings.restoreBackup(file);
+  }));
 
   $("profile-age-generate").addEventListener("click", protectedAction(editor.generateAgeKeypair));
   $("copy-profile-age-public").addEventListener("click", protectedAction(() => copyViewer("profile-age-public", "Публичный ключ скопирован")));
   $("profile-form").addEventListener("submit", protectedAction(editor.saveProfile));
-  $("close-editor").addEventListener("click", editor.closeEditor);
-  $("cancel-editor").addEventListener("click", editor.closeEditor);
+  $("close-editor").addEventListener("click", protectedAction(editor.requestCloseEditor));
+  $("cancel-editor").addEventListener("click", protectedAction(editor.requestCloseEditor));
 
   $("open-active-runtime-yaml").addEventListener("click", protectedAction(viewers.openRuntimeYaml));
   $("open-runtime-events").addEventListener("click", viewers.openRuntimeEvents);
+  all("[data-log-tab]").forEach((button) => button.addEventListener("click", () => viewers.setLogKind(button.dataset.logTab)));
+  all("[data-runtime-view]").forEach((button) => button.addEventListener("click", protectedAction(() => viewers.setRuntimeView(button.dataset.runtimeView))));
+  $("runtime-yaml-wrap").addEventListener("click", viewers.toggleRuntimeWrap);
+  $("download-active-runtime-yaml").addEventListener("click", viewers.downloadRuntimeYaml);
   $("close-runtime-yaml").addEventListener("click", viewers.closeRuntimeYaml);
   $("done-runtime-yaml").addEventListener("click", viewers.closeRuntimeYaml);
   $("close-runtime-events").addEventListener("click", viewers.closeRuntimeEvents);
@@ -159,7 +200,7 @@ function bootstrap() {
   $("done-source-yaml").addEventListener("click", viewers.closeSourceYaml);
 
   $("copy-active-runtime-yaml").addEventListener("click", protectedAction(() => copyViewer("active-runtime-yaml", "Рабочий YAML скопирован")));
-  $("copy-runtime-events").addEventListener("click", protectedAction(() => copyViewer("runtime-events", "События скопированы")));
+  $("copy-runtime-events").addEventListener("click", protectedAction(() => copyViewer("runtime-events", "Журнал скопирован")));
   $("copy-source-yaml").addEventListener("click", protectedAction(() => copyViewer("source-yaml-viewer", "Полученный YAML скопирован")));
   $("copy-basic-auth-hash").addEventListener("click", protectedAction(() => copyViewer("basic-auth-hash", "Хеш скопирован")));
 
@@ -171,6 +212,16 @@ function bootstrap() {
 
   $("delete-cancel").addEventListener("click", subscriptions.closeDelete);
   $("delete-confirm").addEventListener("click", protectedAction(subscriptions.confirmDelete));
+  $("confirm-cancel").addEventListener("click", () => settleConfirm(false));
+  $("confirm-accept").addEventListener("click", () => settleConfirm(true));
+
+  // Клик мимо окна закрывает его. mousedown, а не click: иначе выделение
+  // текста, отпущенное за краем окна, закрывало бы редактор.
+  all(".modal-layer").forEach((layer) => layer.addEventListener("mousedown", (event) => {
+    if (event.target !== layer) return;
+    const closer = MODAL_CLOSERS.find(([id]) => id === layer.id);
+    if (closer) closer[1]();
+  }));
 
   document.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a" && event.target.classList.contains("yaml-viewer")) {
@@ -178,20 +229,21 @@ function bootstrap() {
       selectViewerContents(event.target);
       return;
     }
-    if (event.key !== "Escape") return;
-    if (!$("delete-modal").classList.contains("hidden")) subscriptions.closeDelete();
-    else if (!$("runtime-events-modal").classList.contains("hidden")) viewers.closeRuntimeEvents();
-    else if (!$("runtime-yaml-modal").classList.contains("hidden")) viewers.closeRuntimeYaml();
-    else if (!$("source-yaml-modal").classList.contains("hidden")) viewers.closeSourceYaml();
-    else if (!$("profile-modal-layer").classList.contains("hidden")) editor.closeEditor();
+    if (event.key === "Escape") closeTopModal();
+  });
+
+  window.addEventListener("beforeunload", (event) => {
+    if (!ui.settingsDirty && !editor.editorDirty()) return;
+    event.preventDefault();
+    event.returnValue = "";
   });
 
   const initialPage = location.hash.slice(1);
   showPage(initialPage === "settings" ? "settings" : "subscriptions");
-  window.setInterval(refreshRelativeTimes, 15000);
+  window.setInterval(() => { if (!document.hidden) refreshRelativeTimes(); }, 15000);
   window.addEventListener("focus", refreshRelativeTimes);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) refreshRelativeTimes();
   });
-  load().catch(() => {}).finally(() => schedulePoll(pollDelay()));
+  load().catch(() => {}).finally(() => schedulePoll());
 }
