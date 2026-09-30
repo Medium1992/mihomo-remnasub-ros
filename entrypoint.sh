@@ -2153,9 +2153,11 @@ write_core_status() {
 # через конвейер, чтобы $! остался PID самого mihomo.
 CORE_LOG_PID=
 start_core() {
-  core_log_size=$(wc -c < "$CORE_LOG" 2>/dev/null || printf '0')
-  valid_number "$core_log_size" || core_log_size=0
-  [ "$core_log_size" -le 262144 ] || mv -f "$CORE_LOG" "$CORE_LOG.1"
+  if [ -f "$CORE_LOG" ]; then
+    core_log_size=$(wc -c < "$CORE_LOG")
+    valid_number "$core_log_size" || core_log_size=0
+    [ "$core_log_size" -le 262144 ] || mv -f "$CORE_LOG" "$CORE_LOG.1"
+  fi
   printf '===== %s · %s · %s =====\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$1" "$(mihomo -v 2>/dev/null | head -n1)" >> "$CORE_LOG"
   CORE_LOG_PID=
   rm -f "$CORE_FIFO"
