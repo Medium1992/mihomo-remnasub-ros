@@ -14,5 +14,6 @@
 | `MIHOMO_REPO` | `MetaCubeX/mihomo` | Репозиторий официального ядра. |
 | `MIHOMO_CUSTOM_REPO` | `Medium1992/mihomo-proxy-ros` | Репозиторий совместимого кастомного релиза. |
 | `AMD64VERSION` | `v3` | Уровень amd64: `v1`, `v2`, `v3` или `v4`. |
+| `MIHOMO_FLAVOR` | — | `gvisor` берёт ядро `mihomo-proxy-ros`, собранное с gVisor (ассеты `mihomo-gvisor-linux-*`). Работает только с `MIHOMO_CUSTOM_CORE=1`: ядро MetaCubeX и так всегда с gVisor. |
 
 armv5 использует компактный Buildroot rootfs из `rootfs.tar`; остальные архитектуры основаны на Alpine.

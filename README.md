@@ -323,7 +323,9 @@ Mihomo itself may create `cache.db` and geodata files under `/etc/mihomo` when r
 
 ## 🐳 Build
 
-The `latest` tag carries amd64 v3, arm64, armv7 and armv5; separate `amd64v1`, `amd64v2` and `amd64v4` images are published for x86-64. Dockerfile arguments and per-architecture details live in [docs/BUILD.md](/docs/BUILD.md).
+The `latest` tag carries amd64 v3, arm64, armv7 and armv5; separate `amd64v1`, `amd64v2` and `amd64v4` images are published for x86-64.
+
+**gVisor.** The regular tags carry a core **without gVisor**: it is about 9 MiB smaller, and the container's TUN runs on `stack: mips`. If you need `tun.stack: gvisor` / `mixed` or an outbound Tailscale, take the same tag with a `-gvisor` suffix: `latest-gvisor`, `amd64v1-gvisor`, `amd64v2-gvisor`, `amd64v4-gvisor`, `<version>-gvisor`. Dockerfile arguments and per-architecture details live in [docs/BUILD.md](/docs/BUILD.md).
 
 ## 💖 Support the project
 

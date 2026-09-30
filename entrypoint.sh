@@ -1347,9 +1347,9 @@ EOF
   - name: tun-in
     type: tun
     device: Meta
+    stack: mips
     inet4-address:
       - 100.64.0.1/30
-    udp-timeout: 30
     mtu: 1500
 EOF
       ;;

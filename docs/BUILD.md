@@ -12,5 +12,6 @@
 | `MIHOMO_REPO` | `MetaCubeX/mihomo` | Official core repository. |
 | `MIHOMO_CUSTOM_REPO` | `Medium1992/mihomo-proxy-ros` | Compatible custom release repository. |
 | `AMD64VERSION` | `v3` | amd64 level: `v1`, `v2`, `v3`, or `v4`. |
+| `MIHOMO_FLAVOR` | — | `gvisor` picks the `mihomo-proxy-ros` core built with gVisor (`mihomo-gvisor-linux-*` assets). Only applies with `MIHOMO_CUSTOM_CORE=1`: the MetaCubeX core always includes gVisor. |
 
 armv5 uses the compact Buildroot filesystem from `rootfs.tar`; all other targets use Alpine.

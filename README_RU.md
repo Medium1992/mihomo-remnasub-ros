@@ -335,7 +335,9 @@ Remnawave присылает в конфиге собственные входы
 
 ## 🐳 Сборка
 
-Тег `latest` содержит amd64 v3, arm64, armv7 и armv5; для x86-64 публикуются отдельные `amd64v1`, `amd64v2` и `amd64v4`. Аргументы Dockerfile и особенности архитектур — в [docs/BUILD_RU.md](/docs/BUILD_RU.md).
+Тег `latest` содержит amd64 v3, arm64, armv7 и armv5; для x86-64 публикуются отдельные `amd64v1`, `amd64v2` и `amd64v4`.
+
+**gVisor.** Обычные теги содержат ядро **без gVisor**: оно на ~9 МиБ меньше, а TUN контейнера работает на `stack: mips`. Если нужен `tun.stack: gvisor` / `mixed` или исходящий Tailscale — бери тот же тег с суффиксом `-gvisor`: `latest-gvisor`, `amd64v1-gvisor`, `amd64v2-gvisor`, `amd64v4-gvisor`, `<версия>-gvisor`. Аргументы Dockerfile и особенности архитектур — в [docs/BUILD_RU.md](/docs/BUILD_RU.md).
 
 ## 💖 Поддержка проекта
 
