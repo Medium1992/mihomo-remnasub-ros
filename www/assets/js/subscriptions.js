@@ -125,7 +125,7 @@ export function renderSubscriptions() {
             <button class="icon-button${busy ? " loading" : ""}" type="button" data-profile-action="refresh" data-profile-id="${id}" title="${hasUrl ? (busy ? "Обновление выполняется" : "Обновить сейчас") : "Сначала укажите URL"}"${hasUrl && !busy ? "" : " disabled"}>${icon("refresh")}</button>
             <button class="icon-button" type="button" data-profile-action="source" data-profile-id="${id}" title="Полученный YAML">${icon("file")}</button>
             <button class="icon-button" type="button" data-profile-action="duplicate" data-profile-id="${id}" title="Клонировать">${icon("copy")}</button>
-            <button class="icon-button danger" type="button" data-profile-action="delete" data-profile-id="${id}" title="${active ? "Активную подписку удалить нельзя" : busy ? "Дождитесь окончания обновления" : "Удалить"}"${active || busy ? " disabled" : ""}>${icon("trash")}</button>
+            <button class="icon-button danger" type="button" data-profile-action="delete" data-profile-id="${id}" title="${busy ? "Дождитесь окончания обновления" : "Удалить"}"${busy ? " disabled" : ""}>${icon("trash")}</button>
           </div>
         </div>
         <footer class="subscription-footer"><span class="subscription-health ${health.className}"><i></i>${escapeHtml(health.label)}</span><span class="subscription-response">${escapeHtml(response || "Нет ответа")}</span><code>${id}</code></footer>
@@ -215,9 +215,16 @@ export async function duplicateProfile(profileId) {
 
 export function askDelete(profileId) {
   const profile = profileById(profileId);
-  if (!profile || profile.id === store.model.state.active_profile_id) return;
+  if (!profile) return;
   ui.deleteProfileId = profileId;
-  $("delete-message").textContent = `Профиль «${profileName(profile)}» и его сохранённые файлы будут удалены.`;
+  const active = profile.id === store.model.state.active_profile_id;
+  const last = store.model.profiles.length < 2;
+  const running = Number(store.model.state.run_enabled) === 1;
+  $("delete-message").textContent = last
+    ? `Профиль «${profileName(profile)}» и его сохранённые файлы будут удалены. Это единственная подписка: Mihomo остановится, а на её месте останется пустая заготовка.`
+    : active
+      ? `Профиль «${profileName(profile)}» и его сохранённые файлы будут удалены. Это выбранная подписка: контейнер переключится на другую${running ? " и перезапустит Mihomo" : ""}.`
+      : `Профиль «${profileName(profile)}» и его сохранённые файлы будут удалены.`;
   $("delete-modal").classList.remove("hidden");
 }
 

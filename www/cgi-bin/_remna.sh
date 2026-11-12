@@ -31,14 +31,26 @@ mkdir -p "$JOBS_DIR" "$STATUS_DIR" "$ERRORS_DIR"
 STATE_LOCK_HELD=0
 state_lock() {
   lock_spin=0
+  lock_unstamped_since=
   while ! mkdir "$STATE_LOCK" 2>/dev/null; do
     lock_spin=$((lock_spin + 1))
     if [ "$lock_spin" -gt 50 ]; then
       # Держатель умер, не сняв блокировку: сносим её и заходим сами.
-      lock_started=$(cat "$STATE_LOCK/epoch" 2>/dev/null || printf '0')
-      case "$lock_started" in ''|*[!0-9]*) lock_started=0 ;; esac
-      if [ $(($(date +%s) - lock_started)) -gt 15 ]; then
+      # Блокировку без отметки времени только что взяли и ещё не успели
+      # подписать — её срок отсчитываем с момента, как мы её увидели, а не
+      # считаем брошенной сразу.
+      lock_now=$(date +%s)
+      lock_started=$(cat "$STATE_LOCK/epoch" 2>/dev/null || true)
+      case "$lock_started" in
+        ''|*[!0-9]*)
+          [ -n "$lock_unstamped_since" ] || lock_unstamped_since=$lock_now
+          lock_started=$lock_unstamped_since
+          ;;
+        *) lock_unstamped_since= ;;
+      esac
+      if [ $((lock_now - lock_started)) -gt 15 ]; then
         rm -rf "$STATE_LOCK"
+        lock_unstamped_since=
       fi
       lock_spin=0
       continue
@@ -232,7 +244,7 @@ profile_file() {
 
 # state.conf → ST_*
 state_load() {
-  ST_ACTIVE_PROFILE_ID= ST_RUN_ENABLED= ST_GLOBAL_HEADERS_B64= ST_LISTENER_MODE=
+  ST_ACTIVE_PROFILE_ID= ST_RUN_ENABLED= ST_GLOBAL_HEADERS_B64= ST_LISTENER_MODE= ST_DEFAULT_HWID=
   ST_REDIR_PORT= ST_TPROXY_PORT= ST_MIHOMO_FIND_PROCESS_MODE= ST_MIHOMO_LOG_LEVEL=
   ST_MIHOMO_IPV6= ST_MIHOMO_STORE_SELECTED= ST_MIHOMO_STORE_FAKE_IP=
   ST_GLOBAL_OVERRIDE_B64= ST_MIHOMO_MODE=
@@ -256,6 +268,10 @@ state_load() {
   ST_NETWORK_TCP_FIN_TIMEOUT= ST_NETWORK_TCP_CONGESTION= ST_NETWORK_TCP_BUFFER_MAX=
   conf_load ST_ "$STATE"
   : "${ST_RUN_ENABLED:=0}" "${ST_LISTENER_MODE:=auto}"
+  # Свой x-hwid по умолчанию есть только у установок, сделанных после его
+  # появления; у прежних остаётся общий. Значение уходит в JSON голой строкой.
+  case "$ST_DEFAULT_HWID" in ''|*[!A-Za-z0-9._-]*) ST_DEFAULT_HWID=RouterOS-Solomon ;; esac
+  [ "${#ST_DEFAULT_HWID}" -le 64 ] || ST_DEFAULT_HWID=RouterOS-Solomon
   : "${ST_REDIR_PORT:=12345}" "${ST_TPROXY_PORT:=12346}"
   : "${ST_MIHOMO_FIND_PROCESS_MODE:=off}" "${ST_MIHOMO_LOG_LEVEL:=warning}"
   : "${ST_MIHOMO_MODE:=source}"

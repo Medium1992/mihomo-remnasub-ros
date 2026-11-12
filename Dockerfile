@@ -1,4 +1,7 @@
-FROM --platform=$BUILDPLATFORM alpine:latest AS package
+# Версия базового образа зафиксирована: с alpine:latest одна и та же ревизия
+# репозитория в разные дни собиралась в разные образы.
+ARG ALPINE_VERSION=3.23
+FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS package
 ARG TARGETARCH
 ARG TARGETVARIANT
 ARG MIHOMO_VERSION=latest
@@ -71,9 +74,9 @@ RUN if [ "$TARGETARCH" = "arm" ] && { [ "$TARGETVARIANT" = "v7" ] || [ "$TARGETV
 
 # Базовые образы по платформам. У Alpine нет armv5 — для него берём scratch
 # и распаковываем готовый Buildroot-rootfs (busybox httpd + iptables + openssl).
-FROM --platform=linux/amd64  alpine:latest AS linux-amd64
-FROM --platform=linux/arm64  alpine:latest AS linux-arm64
-FROM --platform=linux/arm/v7 alpine:latest AS linux-armv7
+FROM --platform=linux/amd64  alpine:${ALPINE_VERSION} AS linux-amd64
+FROM --platform=linux/arm64  alpine:${ALPINE_VERSION} AS linux-arm64
+FROM --platform=linux/arm/v7 alpine:${ALPINE_VERSION} AS linux-armv7
 FROM --platform=linux/arm/v5 scratch       AS linux-armv5
 ADD rootfs.tar /
 

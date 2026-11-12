@@ -108,7 +108,8 @@ for old_profile in "$PROFILES_DIR"/p-*.conf; do
   rm -f "$old_profile" \
     "$PROFILES_DIR/$old_id.source.yaml" "$PROFILES_DIR/$old_id.source.meta" \
     "$RUNTIME_DIR/$old_id.config.yaml" "$RUNTIME_DIR/$old_id.config.previous.yaml" "$RUNTIME_DIR/$old_id.config.failed.yaml" \
-    "$ERRORS_DIR/$old_id.txt" "$JOBS_DIR/$old_id.request" "$STATUS_DIR/$old_id.conf" "$STATUS_DIR/$old_id.version"
+    "$ERRORS_DIR/$old_id.txt" "$JOBS_DIR/$old_id.request" "$STATUS_DIR/$old_id.conf" "$STATUS_DIR/$old_id.version" \
+    "$STATUS_DIR/$old_id.denied"
 done
 for restore_profile in "$stage"/p-*.conf; do
   [ -f "$restore_profile" ] || continue

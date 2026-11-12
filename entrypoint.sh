@@ -40,6 +40,19 @@ BASIC_AUTH_HASH="${BASIC_AUTH_HASH:-$BASIC_AUTH_HASH_DEFAULT}"
 
 mkdir -p "$APP_DIR" "$PROFILES_DIR" "$RUNTIME_DIR" "$JOBS_DIR" "$STATUS_DIR" "$ERRORS_DIR" "$CHECKS_DIR"
 
+# Фоновые циклы — подшеллы PID 1, и $$ у них у всех равен 1. Временные файлы
+# с таким суффиксом у supervisor, воркера и таймера совпадали, поэтому каждый
+# цикл при старте берёт свой настоящий PID: встроенный read открывает
+# /proc/self от имени самого подшелла, без форка.
+SELF_PID=$$
+adopt_self_pid() {
+  self_pid_value=
+  if [ -r /proc/self/stat ]; then
+    read -r self_pid_value self_pid_rest < /proc/self/stat 2>/dev/null || self_pid_value=
+  fi
+  case "$self_pid_value" in ''|*[!0-9]*) SELF_PID=$$ ;; *) SELF_PID=$self_pid_value ;; esac
+}
+
 PERSIST_CHANGED=0
 persist_file_if_changed() {
   persist_candidate="$1"
@@ -49,7 +62,7 @@ persist_file_if_changed() {
     rm -f "$persist_candidate"
     return 0
   fi
-  persist_tmp="$persist_destination.tmp.$$"
+  persist_tmp="$persist_destination.tmp.$SELF_PID"
   if ! cp "$persist_candidate" "$persist_tmp"; then
     rm -f "$persist_candidate" "$persist_tmp"
     return 1
@@ -120,7 +133,7 @@ event_log() {
   event_size=$(wc -c < "$EVENT_LOG" 2>/dev/null || printf '0')
   valid_number "$event_size" || event_size=0
   if [ "$event_size" -gt 262144 ]; then
-    tail -n 300 "$EVENT_LOG" > "$EVENT_LOG.tmp.$$" 2>/dev/null && mv "$EVENT_LOG.tmp.$$" "$EVENT_LOG"
+    tail -n 300 "$EVENT_LOG" > "$EVENT_LOG.tmp.$SELF_PID" 2>/dev/null && mv "$EVENT_LOG.tmp.$SELF_PID" "$EVENT_LOG"
   fi
 }
 
@@ -137,7 +150,7 @@ write_profile_status() {
   shift 9
   status_message="$1"
   status_validation="$2"
-  status_tmp="$STATUS_DIR/$status_id.conf.tmp.$$"
+  status_tmp="$STATUS_DIR/$status_id.conf.tmp.$SELF_PID"
   umask 077
   cat > "$status_tmp" <<EOF
 STATE=$status_state
@@ -164,7 +177,7 @@ queue_profile_job_runtime() {
   queue_file="$JOBS_DIR/$queue_id.request"
   existing_action=$(awk -F= '$1 == "ACTION" { print $2; exit }' "$queue_file" 2>/dev/null || true)
   [ "$existing_action" != fetch ] || queue_action=fetch
-  queue_tmp="$queue_file.tmp.$$"
+  queue_tmp="$queue_file.tmp.$SELF_PID"
   umask 077
   cat > "$queue_tmp" <<EOF
 ACTION=$queue_action
@@ -240,7 +253,7 @@ EOF
 replace_state_active_profile() {
   replacement_id="$1"
   [ -f "$STATE" ] || return 0
-  replacement_tmp="$RUNTIME_DIR/state-active.$$"
+  replacement_tmp="$RUNTIME_DIR/state-active.$SELF_PID"
   awk -F= -v id="$replacement_id" '
     BEGIN { replaced=0 }
     $1 == "ACTIVE_PROFILE_ID" { print "ACTIVE_PROFILE_ID=" id; replaced=1; next }
@@ -252,7 +265,7 @@ replace_state_active_profile() {
 
 disable_state_runtime() {
   [ -f "$STATE" ] || return 0
-  runtime_tmp="$RUNTIME_DIR/state-runtime.$$"
+  runtime_tmp="$RUNTIME_DIR/state-runtime.$SELF_PID"
   awk -F= '
     BEGIN { replaced=0 }
     $1 == "RUN_ENABLED" { print "RUN_ENABLED=0"; replaced=1; next }
@@ -297,9 +310,16 @@ migrate_profile_storage() {
 seed_state() {
   initial_profile_id="$1"
   [ -f "$STATE" ] && return 0
+  # Свой x-hwid у каждой установки: с общим значением все роутеры одного
+  # пользователя выглядели для провайдера одним устройством. Установки,
+  # сделанные раньше, ключа не имеют и остаются на прежнем общем значении:
+  # смена x-hwid заняла бы у провайдера ещё одно место в лимите устройств.
+  seed_hwid=RouterOS-$(openssl rand -hex 8 2>/dev/null || true)
+  [ "${#seed_hwid}" -eq 25 ] || seed_hwid=RouterOS-Solomon
   cat > "$STATE" <<EOF
 STATE_VERSION=5
 ACTIVE_PROFILE_ID=$initial_profile_id
+DEFAULT_HWID=$seed_hwid
 RUN_ENABLED=0
 GLOBAL_HEADERS_B64=
 LISTENER_MODE=auto
@@ -393,6 +413,7 @@ load_state() {
   ACTIVE_PROFILE_ID=
   RUN_ENABLED=0
   GLOBAL_HEADERS_B64=
+  DEFAULT_HWID=RouterOS-Solomon
   LISTENER_MODE=auto
   REDIR_PORT=12345 TPROXY_PORT=12346
   MIHOMO_FIND_PROCESS_MODE=off MIHOMO_LOG_LEVEL=warning MIHOMO_IPV6=0
@@ -423,12 +444,14 @@ load_state() {
     key=${line%%=*}
     value=${line#*=}
     case "$key" in
-      ACTIVE_PROFILE_ID|RUN_ENABLED|GLOBAL_HEADERS_B64|GLOBAL_OVERRIDE_B64|MIHOMO_MODE|LISTENER_MODE|REDIR_PORT|TPROXY_PORT|MIHOMO_FIND_PROCESS_MODE|MIHOMO_LOG_LEVEL|MIHOMO_IPV6|MIHOMO_STORE_SELECTED|MIHOMO_STORE_FAKE_IP|MIHOMO_SNIFFER_MODE|MIHOMO_SNIFFER_OVERRIDE|MIHOMO_SNIFFER_ENABLE|MIHOMO_SNIFFER_FORCE_DNS_MAPPING|MIHOMO_SNIFFER_PARSE_PURE_IP|MIHOMO_SNIFFER_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_QUIC_PORTS_B64|MIHOMO_SNIFFER_TLS_PORTS_B64|MIHOMO_SNIFFER_HTTP_PORTS_B64|MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_FORCE_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64|MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64|EXTERNAL_UI_PRESET|EXTERNAL_UI_URL_B64|EXTERNAL_UI_SECRET_B64|NETWORK_DISABLE_IPV6|NETWORK_QDISC|NETWORK_DISABLE_MULTICAST|NETWORK_CT_ESTABLISHED|NETWORK_CT_SYN_SENT|NETWORK_CT_SYN_RECV|NETWORK_CT_FIN_WAIT|NETWORK_CT_CLOSE_WAIT|NETWORK_CT_LAST_ACK|NETWORK_CT_TIME_WAIT|NETWORK_CT_CLOSE|NETWORK_CT_UNACKNOWLEDGED|NETWORK_CT_UDP_STREAM|INBOUND_STRIP_SOCKS|INBOUND_STRIP_HTTP|INBOUND_STRIP_MIXED|LOCAL_SOCKS_ENABLED|LOCAL_SOCKS_PORT|LOCAL_SOCKS_USER_B64|LOCAL_SOCKS_PASS_B64|LOCAL_HTTP_ENABLED|LOCAL_HTTP_PORT|LOCAL_HTTP_USER_B64|LOCAL_HTTP_PASS_B64|NETWORK_TCP_NOTSENT_LOWAT|NETWORK_TCP_SLOW_START_AFTER_IDLE|NETWORK_TCP_MTU_PROBING|NETWORK_TCP_FIN_TIMEOUT|NETWORK_TCP_CONGESTION|NETWORK_TCP_BUFFER_MAX)
+      ACTIVE_PROFILE_ID|RUN_ENABLED|GLOBAL_HEADERS_B64|DEFAULT_HWID|GLOBAL_OVERRIDE_B64|MIHOMO_MODE|LISTENER_MODE|REDIR_PORT|TPROXY_PORT|MIHOMO_FIND_PROCESS_MODE|MIHOMO_LOG_LEVEL|MIHOMO_IPV6|MIHOMO_STORE_SELECTED|MIHOMO_STORE_FAKE_IP|MIHOMO_SNIFFER_MODE|MIHOMO_SNIFFER_OVERRIDE|MIHOMO_SNIFFER_ENABLE|MIHOMO_SNIFFER_FORCE_DNS_MAPPING|MIHOMO_SNIFFER_PARSE_PURE_IP|MIHOMO_SNIFFER_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_QUIC_PORTS_B64|MIHOMO_SNIFFER_TLS_PORTS_B64|MIHOMO_SNIFFER_HTTP_PORTS_B64|MIHOMO_SNIFFER_HTTP_OVERRIDE_DESTINATION|MIHOMO_SNIFFER_FORCE_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_DOMAIN_B64|MIHOMO_SNIFFER_SKIP_SRC_ADDRESS_B64|MIHOMO_SNIFFER_SKIP_DST_ADDRESS_B64|EXTERNAL_UI_PRESET|EXTERNAL_UI_URL_B64|EXTERNAL_UI_SECRET_B64|NETWORK_DISABLE_IPV6|NETWORK_QDISC|NETWORK_DISABLE_MULTICAST|NETWORK_CT_ESTABLISHED|NETWORK_CT_SYN_SENT|NETWORK_CT_SYN_RECV|NETWORK_CT_FIN_WAIT|NETWORK_CT_CLOSE_WAIT|NETWORK_CT_LAST_ACK|NETWORK_CT_TIME_WAIT|NETWORK_CT_CLOSE|NETWORK_CT_UNACKNOWLEDGED|NETWORK_CT_UDP_STREAM|INBOUND_STRIP_SOCKS|INBOUND_STRIP_HTTP|INBOUND_STRIP_MIXED|LOCAL_SOCKS_ENABLED|LOCAL_SOCKS_PORT|LOCAL_SOCKS_USER_B64|LOCAL_SOCKS_PASS_B64|LOCAL_HTTP_ENABLED|LOCAL_HTTP_PORT|LOCAL_HTTP_USER_B64|LOCAL_HTTP_PASS_B64|NETWORK_TCP_NOTSENT_LOWAT|NETWORK_TCP_SLOW_START_AFTER_IDLE|NETWORK_TCP_MTU_PROBING|NETWORK_TCP_FIN_TIMEOUT|NETWORK_TCP_CONGESTION|NETWORK_TCP_BUFFER_MAX)
         export "$key=$value"
         ;;
     esac
   done < "$STATE"
   case "$RUN_ENABLED" in 0|1) ;; *) RUN_ENABLED=0 ;; esac
+  case "$DEFAULT_HWID" in ''|*[!A-Za-z0-9._-]*) DEFAULT_HWID=RouterOS-Solomon ;; esac
+  [ "${#DEFAULT_HWID}" -le 64 ] || DEFAULT_HWID=RouterOS-Solomon
   case "$NETWORK_DISABLE_IPV6" in 0|1) ;; *) NETWORK_DISABLE_IPV6=1 ;; esac
   case "$NETWORK_DISABLE_MULTICAST" in 0|1) ;; *) NETWORK_DISABLE_MULTICAST=1 ;; esac
   case "$NETWORK_QDISC" in fq_codel|cake|codel|sfq|pfifo|bfifo|system) ;; *) NETWORK_QDISC=fq_codel ;; esac
@@ -524,7 +547,7 @@ default_mihomo_user_agent() {
 
 effective_global_headers() {
   default_ua=$(default_mihomo_user_agent)
-  b64_decode_file "$GLOBAL_HEADERS_B64" | awk -v default_ua="$default_ua" '
+  b64_decode_file "$GLOBAL_HEADERS_B64" | awk -v default_ua="$default_ua" -v default_hwid="$DEFAULT_HWID" '
     BEGIN {
       count = 5
       order[1] = "x-hwid"
@@ -532,7 +555,7 @@ effective_global_headers() {
       order[3] = "x-ver-os"
       order[4] = "x-device-model"
       order[5] = "user-agent"
-      fallback["x-hwid"] = "RouterOS-Solomon"
+      fallback["x-hwid"] = default_hwid
       fallback["x-device-os"] = "RouterOS"
       fallback["x-ver-os"] = "7.23.3"
       fallback["x-device-model"] = "MikroTik RB5009UG+S+IN"
@@ -578,8 +601,8 @@ effective_global_headers() {
 }
 
 effective_request_headers() {
-  request_global="$RUNTIME_DIR/request-global.$$.headers"
-  request_local="$RUNTIME_DIR/request-local.$$.headers"
+  request_global="$RUNTIME_DIR/request-global.$SELF_PID.headers"
+  request_local="$RUNTIME_DIR/request-local.$SELF_PID.headers"
   effective_global_headers > "$request_global"
   : > "$request_local"
   if [ "$LOCAL_OVERRIDE_ENABLED" = 1 ]; then
@@ -852,7 +875,7 @@ normalize_response_headers() {
       if (separator < 2) next
       key = tolower(trim(substr(line, 1, separator - 1)))
       value = trim(substr(line, separator + 1))
-      if (key ~ /^(profile-title|profile-update-interval|subscription-userinfo|profile-web-page-url|support-url|subscription-refill-date|announce)$/) {
+      if (key ~ /^(profile-title|profile-update-interval|subscription-userinfo|profile-web-page-url|support-url|subscription-refill-date|announce|x-hwid-not-supported|x-hwid-max-devices-reached|x-hwid-limit)$/) {
         headers[key] = value
       }
     }
@@ -864,7 +887,10 @@ normalize_response_headers() {
       order[5] = "support-url"
       order[6] = "subscription-refill-date"
       order[7] = "announce"
-      for (i = 1; i <= 7; i++) if (order[i] in headers) print order[i] "=" headers[order[i]]
+      order[8] = "x-hwid-not-supported"
+      order[9] = "x-hwid-max-devices-reached"
+      order[10] = "x-hwid-limit"
+      for (i = 1; i <= 10; i++) if (order[i] in headers) print order[i] "=" headers[order[i]]
     }
   ' "$response_log" > "$response_headers"
 }
@@ -918,11 +944,20 @@ decode_provider_text() {
   printf '%s' "$provider_text" | tr -d '\r\n' | head -c 2048
 }
 
+# Разбор списка proxies: заглушки VLESS с нулевым UUID (так Remnawave отдаёт
+# истёкшую, отключённую или ограниченную по HWID подписку, а в имени прокси
+# пишет причину), общее число прокси и наличие proxy-providers.
 inspect_source_vless_state() {
-  source_state_file="$RUNTIME_DIR/source-vless-state.$$.txt"
+  inspect_file="${1:-$SOURCE}"
+  source_state_file="$RUNTIME_DIR/source-vless-state.$SELF_PID.txt"
+  source_summary_file="$RUNTIME_DIR/source-summary.$SELF_PID.txt"
   SOURCE_ZERO_VLESS_COUNT=0
   SOURCE_ZERO_VLESS_ENTRIES=
-  awk '
+  SOURCE_PROXY_COUNT=0
+  SOURCE_HAS_PROXIES_KEY=0
+  SOURCE_HAS_PROVIDERS=0
+  : > "$source_summary_file"
+  awk -v summary="$source_summary_file" '
     function trim(value) {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
       gsub(/^"|"$/, "", value)
@@ -956,6 +991,7 @@ inspect_source_vless_state() {
       return length(compact) == 32 && compact ~ /^0+$/
     }
     function flush(label) {
+      if (proxy_type != "" || proxy_name != "") total++
       if (tolower(proxy_type) == "vless" && zero_uuid(proxy_uuid)) {
         label=proxy_name
         if (label == "") label="VLESS #" (found + 1)
@@ -965,9 +1001,11 @@ inspect_source_vless_state() {
       proxy_name=proxy_type=proxy_uuid=""
     }
     /^[^[:space:]#-][^:]*:/ {
+      in_providers=0
       if ($0 ~ /^proxies[[:space:]]*:/) {
         flush()
         in_proxies=1
+        has_proxies=1
         item_indent=-1
         next
       }
@@ -975,7 +1013,16 @@ inspect_source_vless_state() {
         flush()
         in_proxies=0
       }
+      if ($0 ~ /^proxy-providers[[:space:]]*:/) {
+        inline=$0
+        sub(/^proxy-providers[[:space:]]*:[[:space:]]*/, "", inline)
+        sub(/[[:space:]]*#.*$/, "", inline)
+        if (inline != "" && inline != "{}") providers=1
+        in_providers=1
+        next
+      }
     }
+    in_providers && $0 !~ /^[[:space:]]*(#|$)/ { providers=1 }
     in_proxies {
       line=$0
       if (line ~ /^[[:space:]]*-[[:space:]]*/) {
@@ -987,19 +1034,26 @@ inspect_source_vless_state() {
       value=field(line, "type"); if (value != "") proxy_type=value
       value=field(line, "uuid"); if (value != "") proxy_uuid=value
     }
-    END { if (in_proxies) flush() }
-  ' "$SOURCE" > "$source_state_file" 2>/dev/null || : > "$source_state_file"
+    END {
+      if (in_proxies) flush()
+      print (total + 0), (has_proxies + 0), (providers + 0) > summary
+    }
+  ' "$inspect_file" > "$source_state_file" 2>/dev/null || : > "$source_state_file"
   SOURCE_ZERO_VLESS_COUNT=$(wc -l < "$source_state_file" | tr -d ' ')
   case "$SOURCE_ZERO_VLESS_COUNT" in ''|*[!0-9]*) SOURCE_ZERO_VLESS_COUNT=0 ;; esac
   SOURCE_ZERO_VLESS_ENTRIES=$(head -n 100 "$source_state_file")
-  rm -f "$source_state_file"
+  read -r SOURCE_PROXY_COUNT SOURCE_HAS_PROXIES_KEY SOURCE_HAS_PROVIDERS < "$source_summary_file" 2>/dev/null || true
+  valid_number "$SOURCE_PROXY_COUNT" || SOURCE_PROXY_COUNT=0
+  case "$SOURCE_HAS_PROXIES_KEY" in 1) ;; *) SOURCE_HAS_PROXIES_KEY=0 ;; esac
+  case "$SOURCE_HAS_PROVIDERS" in 1) ;; *) SOURCE_HAS_PROVIDERS=0 ;; esac
+  rm -f "$source_state_file" "$source_summary_file"
 }
 
 write_source_meta() {
   response_headers="$1"
   source_http_status="$2"
   source_http_line="$3"
-  meta_tmp="$RUNTIME_DIR/meta.$ACTIVE_PROFILE_ID.$$"
+  meta_tmp="$RUNTIME_DIR/meta.$ACTIVE_PROFILE_ID.$SELF_PID"
   provider_title=$(decode_provider_text "$(response_header_value "$response_headers" profile-title)")
   provider_interval=$(response_header_value "$response_headers" profile-update-interval)
   case "$provider_interval" in
@@ -1014,7 +1068,6 @@ write_source_meta() {
   support_url=$(response_header_value "$response_headers" support-url | tr -d '\r\n' | head -c 2048)
   subscription_refill_date=$(response_header_value "$response_headers" subscription-refill-date | tr -d '\r\n' | head -c 512)
   announce=$(decode_provider_text "$(response_header_value "$response_headers" announce)")
-  inspect_source_vless_state
   meta_configuration_valid=pending
   meta_validation_b64=
   if [ "$FETCH_SOURCE_CHANGED" = 0 ] && [ -f "$META" ]; then
@@ -1030,7 +1083,7 @@ write_source_meta() {
   cat > "$meta_tmp" <<EOF
 fetched_at=$(date -Iseconds)
 fetched_epoch=$(date +%s)
-bytes=$(wc -c < "$SOURCE")
+bytes=$FETCH_BYTES
 http_status=$source_http_status
 http_status_line_b64=$(b64_encode "$source_http_line")
 configuration_valid=$meta_configuration_valid
@@ -1051,7 +1104,7 @@ EOF
 update_source_meta_validation() {
   validation_state="$1"
   validation_text="$2"
-  meta_tmp="$RUNTIME_DIR/meta-validation.$ACTIVE_PROFILE_ID.$$"
+  meta_tmp="$RUNTIME_DIR/meta-validation.$ACTIVE_PROFILE_ID.$SELF_PID"
   umask 077
   if [ -f "$META" ]; then
     awk -F= '$1 != "configuration_valid" && $1 != "validation_b64" { print }' "$META" > "$meta_tmp"
@@ -1096,7 +1149,7 @@ decrypt_source_file() {
     return 1
   fi
   decrypt_out="$decrypt_target.plain"
-  decrypt_log="$RUNTIME_DIR/age-decrypt.$$.log"
+  decrypt_log="$RUNTIME_DIR/age-decrypt.$SELF_PID.log"
   rm -f "$decrypt_out"
   if ! mihomo age decrypt "$decrypt_key" "$decrypt_target" "$decrypt_out" > "$decrypt_log" 2>&1; then
     # Подкоманда age завершается через panic(), поэтому причина лежит в первой
@@ -1129,6 +1182,8 @@ fetch_source() {
   FETCH_BYTES=0
   FETCH_SOURCE_CHANGED=0
   FETCH_DECRYPTED=0
+  FETCH_REVOKED=0
+  FETCH_SHA256=
   FETCH_ERROR=
   url="$(b64_decode_file "$SUB_URL_B64")"
   [ -n "$url" ] || {
@@ -1138,14 +1193,16 @@ fetch_source() {
   case "$url" in http://*|https://*) ;; *) FETCH_ERROR="Subscription URL must use http(s)"; return 1 ;; esac
   valid_number "$SUB_TIMEOUT_SECONDS" || SUB_TIMEOUT_SECONDS=30
   [ "$SUB_TIMEOUT_SECONDS" -ge 3 ] && [ "$SUB_TIMEOUT_SECONDS" -le 120 ] || SUB_TIMEOUT_SECONDS=30
-  tmp="$RUNTIME_DIR/source.$ACTIVE_PROFILE_ID.$$.yaml"
-  response_log="$RUNTIME_DIR/wget-response.$$.log"
-  response_headers="$RUNTIME_DIR/wget-response.$$.headers"
+  tmp="$RUNTIME_DIR/source.$ACTIVE_PROFILE_ID.$SELF_PID.yaml"
+  response_log="$RUNTIME_DIR/wget-response.$SELF_PID.log"
+  response_headers="$RUNTIME_DIR/wget-response.$SELF_PID.headers"
   set -- -S -T "$SUB_TIMEOUT_SECONDS" -O "$tmp"
   headers="$(effective_request_headers)"
+  fetch_sent_headers=
   if [ -n "$headers" ]; then
     while IFS= read -r header; do
       [ -n "$header" ] || continue
+      fetch_sent_headers="${fetch_sent_headers:+$fetch_sent_headers; }$header"
       case "$header" in
         [Uu][Ss][Ee][Rr]-[Aa][Gg][Ee][Nn][Tt]:*)
           user_agent=${header#*:}
@@ -1159,18 +1216,59 @@ $headers
 EOF
   fi
   [ "$SUB_INSECURE_TLS" = 1 ] && set -- "$@" --no-check-certificate
+  # В журнал уходит ровно то, что получит провайдер: ответ Remnawave зависит
+  # от заголовков, и без этой строки «почему пришло не то» не разобрать — её
+  # можно один в один повторить через curl -H.
+  event_log INFO "$ACTIVE_PROFILE_ID" "request headers: ${fetch_sent_headers:-(none)}"
   wget_rc=0
-  wget "$@" "$url" 2> "$response_log" || wget_rc=$?
+  # Ответ пишется в /dev/shm, то есть в оперативную память роутера. Лимит
+  # проверяется уже во время загрузки: ulimit -f в блоках по 512 байт, чуть
+  # больше 16 МиБ, и ядро прерывает wget, как только файл его перерастёт.
+  (ulimit -f 32770; exec wget "$@" "$url") 2> "$response_log" || wget_rc=$?
   FETCH_HTTP_LINE=$(response_status_line "$response_log")
   FETCH_HTTP_TRACE=$(response_status_trace "$response_log")
   FETCH_HTTP_CODE=$(response_status_code "$FETCH_HTTP_LINE")
+  fetch_denied_file="$STATUS_DIR/$ACTIVE_PROFILE_ID.denied"
   if [ "$wget_rc" -ne 0 ]; then
+    fetch_partial=0
+    [ ! -f "$tmp" ] || fetch_partial=$(wc -c < "$tmp")
+    valid_number "$fetch_partial" || fetch_partial=0
     wget_detail=$(tail -n 1 "$response_log" 2>/dev/null | tr -d '\r\n' | head -c 1024)
     [ -n "$FETCH_HTTP_LINE" ] && FETCH_ERROR="$FETCH_HTTP_LINE" || FETCH_ERROR="Subscription download failed"
     [ -z "$wget_detail" ] || FETCH_ERROR="$FETCH_ERROR: $wget_detail"
+    [ "$fetch_partial" -lt 16777216 ] || FETCH_ERROR="Subscription exceeds 16 MiB"
+    case "$FETCH_HTTP_CODE" in
+      401|403|404|410|451)
+        # Один отказ ещё не значит, что подписку отозвали: так же выглядят
+        # разовый 403 от защиты перед панелью и её короткий сбой. Работающую
+        # конфигурацию снимаем только после третьего отказа подряд; повторы
+        # при этом идут раз в пять минут, а не по интервалу обновления. Если
+        # рабочей конфигурации ещё нет, беречь нечего — отказ действует сразу.
+        fetch_denied=$(cat "$fetch_denied_file" 2>/dev/null || printf 0)
+        valid_number "$fetch_denied" || fetch_denied=0
+        fetch_denied=$((fetch_denied + 1))
+        printf '%s\n' "$fetch_denied" > "$fetch_denied_file" 2>/dev/null || true
+        # Рабочий конфиг живёт в /dev/shm и после перезапуска контейнера
+        # появляется не сразу, поэтому годным считается и проверенный ранее
+        # сохранённый YAML.
+        fetch_working=0
+        if [ -s "$FINAL" ]; then
+          fetch_working=1
+        elif [ -s "$SOURCE" ] && conf_get "$META" configuration_valid && [ "$CONF_VALUE" = 1 ]; then
+          fetch_working=1
+        fi
+        if [ "$fetch_denied" -lt 3 ] && [ "$fetch_working" = 1 ]; then
+          FETCH_ERROR="Subscription access denied (HTTP $FETCH_HTTP_CODE), refusal $fetch_denied of 3 in a row; the working configuration is kept until the third one"
+        else
+          FETCH_ERROR="Subscription access denied (HTTP $FETCH_HTTP_CODE); the working configuration is removed"
+          FETCH_REVOKED=denied
+        fi
+        ;;
+    esac
     rm -f "$tmp" "$response_log" "$response_headers"
     return 1
   fi
+  rm -f "$fetch_denied_file"
   normalize_response_headers "$response_log" "$response_headers"
   rm -f "$response_log"
   [ -s "$tmp" ] || { rm -f "$tmp" "$response_headers"; FETCH_ERROR="Subscription response is empty"; return 1; }
@@ -1183,6 +1281,36 @@ EOF
     return 1
   fi
   FETCH_BYTES=$(wc -c < "$tmp")
+  FETCH_SHA256=$({ sha256sum "$tmp" 2>/dev/null || openssl dgst -sha256 -r "$tmp" 2>/dev/null; } | cut -c1-16)
+  inspect_source_vless_state "$tmp"
+  # Ответ 200, но провайдер подписку ограничил: явные заголовки HWID-политики
+  # Remnawave, одни заглушки VLESS с нулевым UUID (истёкшая или отключённая
+  # подписка) или конфиг без единого прокси. Старые credentials в этом случае
+  # работать не должны, поэтому конфигурация снимается сразу, без повторов.
+  # YAML без ключа proxies сюда не относится: это не конфиг Mihomo, его
+  # отклонит mihomo -t и останется прежняя рабочая версия.
+  fetch_restriction=
+  fetch_hwid_policy="$(response_header_value "$response_headers" x-hwid-not-supported)$(response_header_value "$response_headers" x-hwid-max-devices-reached)$(response_header_value "$response_headers" x-hwid-limit)"
+  if [ -n "$fetch_hwid_policy" ]; then
+    fetch_restriction=${SOURCE_ZERO_VLESS_ENTRIES:-Subscription access is restricted by HWID policy}
+  elif [ "$SOURCE_HAS_PROVIDERS" = 0 ] && [ "$SOURCE_ZERO_VLESS_COUNT" -gt 0 ] &&
+       [ "$SOURCE_PROXY_COUNT" -le "$SOURCE_ZERO_VLESS_COUNT" ]; then
+    fetch_restriction=$SOURCE_ZERO_VLESS_ENTRIES
+  elif [ "$SOURCE_HAS_PROVIDERS" = 0 ] && [ "$SOURCE_HAS_PROXIES_KEY" = 1 ] && [ "$SOURCE_PROXY_COUNT" = 0 ]; then
+    fetch_restriction='Subscription contains no proxies'
+  fi
+  if [ -n "$fetch_restriction" ]; then
+    # Сам YAML на флешку не пишется: в нём только заглушки, а при каждом
+    # плановом повторе он перезаписывался бы заново. Метаданные остаются —
+    # по ним карточка показывает трафик, срок и причину.
+    rm -f "$tmp"
+    FETCH_SOURCE_CHANGED=1
+    write_source_meta "$response_headers" "$FETCH_HTTP_CODE" "$FETCH_HTTP_LINE" || true
+    rm -f "$response_headers"
+    FETCH_ERROR="Subscription is restricted by the provider: $(printf '%s' "$fetch_restriction" | head -n 5 | tr '\n' ';' | sed 's/;$//; s/;/; /g')"
+    FETCH_REVOKED=restricted
+    return 1
+  fi
   if ! persist_file_if_changed "$tmp" "$SOURCE"; then
     rm -f "$response_headers"
     FETCH_ERROR="Subscription response could not be saved"
@@ -1479,7 +1607,7 @@ write_ui_status() {
   ui_state="$1"
   ui_message="$2"
   ui_source="$3"
-  ui_tmp="$UI_STATUS.tmp.$$"
+  ui_tmp="$UI_STATUS.tmp.$SELF_PID"
   umask 077
   cat > "$ui_tmp" <<EOF
 STATE=$ui_state
@@ -1499,10 +1627,10 @@ prepare_external_ui() {
   current=$(cat "$marker" 2>/dev/null || true)
   [ "$ui_force" = 1 ] || { [ "$current" = "$ui_url" ] && [ -s "$UI_DIR/index.html" ] && return 0; }
 
-  archive="$RUNTIME_DIR/external-ui.$$.zip"
-  panel_response="$RUNTIME_DIR/external-ui.$$.response"
-  stage="$MIHOMO_DIR/.ui-stage.$$"
-  previous="$MIHOMO_DIR/.ui-previous.$$"
+  archive="$RUNTIME_DIR/external-ui.$SELF_PID.zip"
+  panel_response="$RUNTIME_DIR/external-ui.$SELF_PID.response"
+  stage="$MIHOMO_DIR/.ui-stage.$SELF_PID"
+  previous="$MIHOMO_DIR/.ui-previous.$SELF_PID"
   rm -f "$archive" "$panel_response"
   rm -rf "$stage" "$previous"
   mkdir -p "$stage"
@@ -1561,8 +1689,8 @@ prepare_external_ui() {
   fi
   rm -rf "$stage" "$previous"
   umask 077
-  printf '%s' "$ui_url" > "$marker.tmp.$$"
-  mv "$marker.tmp.$$" "$marker"
+  printf '%s' "$ui_url" > "$marker.tmp.$SELF_PID"
+  mv "$marker.tmp.$SELF_PID" "$marker"
   log "external UI installed into $UI_DIR"
 }
 
@@ -1782,7 +1910,7 @@ build_final_config() {
     [ "${BUILD_DRY_RUN:-0}" = 1 ] || printf '%s\n' "$BUILD_ERROR" > "$ERROR_FILE"
     return 1
   }
-  build_prefix="$RUNTIME_DIR/build.$ACTIVE_PROFILE_ID.$$"
+  build_prefix="$RUNTIME_DIR/build.$ACTIVE_PROFILE_ID.$SELF_PID"
   overlay="$build_prefix.listeners.yaml"
   controller_overlay="$build_prefix.controller.yaml"
   managed_overlay="$build_prefix.managed.yaml"
@@ -1862,8 +1990,8 @@ build_final_config() {
   final_version=$(cat "$final_version_file" 2>/dev/null || printf '0')
   valid_number "$final_version" || final_version=0
   final_version=$((final_version + 1))
-  printf '%s\n' "$final_version" > "$final_version_file.tmp.$$"
-  mv "$final_version_file.tmp.$$" "$final_version_file"
+  printf '%s\n' "$final_version" > "$final_version_file.tmp.$SELF_PID"
+  mv "$final_version_file.tmp.$SELF_PID" "$final_version_file"
   update_source_meta_validation 1 "$BUILD_VALIDATION"
   rm -f "$build_prefix".*
   rm -f "$ERROR_FILE"
@@ -1894,7 +2022,7 @@ trap stop TERM INT
 
 write_check_result() {
   wcr_file="$1"
-  wcr_tmp="$wcr_file.tmp.$$"
+  wcr_tmp="$wcr_file.tmp.$SELF_PID"
   umask 077
   {
     printf 'STATE=%s\n' "$2"
@@ -1912,7 +2040,7 @@ run_check_job() {
   check_token=${check_request##*/}
   check_token=${check_token%.request}
   case "${check_token#c-}" in ''|*[!0-9-]*) rm -f "$check_request"; return 0 ;; esac
-  check_work="$check_request.work.$$"
+  check_work="$check_request.work.$SELF_PID"
   mv "$check_request" "$check_work" 2>/dev/null || return 0
   check_result="$CHECKS_DIR/$check_token.result"
   check_yaml="$CHECKS_DIR/$check_token.yaml"
@@ -1951,6 +2079,20 @@ run_check_job() {
   BUILD_DRY_RUN=0
 }
 
+# Провайдер отказал окончательно: снимаем всё, из чего ядро могло бы снова
+# собраться со старыми credentials. Без YAML supervisor не станет его
+# пересобирать, а статус error не даёт ему поставить загрузку самому:
+# повтор пойдёт по обычному интервалу обновления, и первый успешный ответ
+# вернёт подписку в работу. Метаданные остаются ради названия и трафика.
+revoke_profile_runtime() {
+  revoke_id="$1"
+  revoke_reason="$2"
+  rm -f "$PROFILES_DIR/$revoke_id.source.yaml" \
+    "$RUNTIME_DIR/$revoke_id.config.yaml" "$RUNTIME_DIR/$revoke_id.config.previous.yaml" \
+    "$RUNTIME_DIR/$revoke_id.config.failed.yaml"
+  [ ! -f "$META" ] || update_source_meta_validation 0 "$revoke_reason"
+}
+
 process_profile_job() {
   job_id="$1" job_action="$2"
   job_started=$(date +%s)
@@ -1967,12 +2109,28 @@ process_profile_job() {
     event_log INFO "$job_id" "subscription download started"
     if ! fetch_source; then
       job_finished=$(date +%s)
+      if [ "$FETCH_REVOKED" = denied ]; then
+        revoke_profile_runtime "$job_id" "Subscription access denied by the provider"
+        job_error_title="Провайдер отказал в доступе к подписке, рабочая конфигурация снята"
+      elif [ "$FETCH_REVOKED" = restricted ]; then
+        revoke_profile_runtime "$job_id" "$FETCH_ERROR"
+        job_error_title="Подписка истекла, отключена или ограничена по HWID, рабочая конфигурация снята"
+      else
+        job_error_title="Не удалось обновить подписку"
+      fi
       {
-        printf '%s\n' "Не удалось обновить подписку"
+        printf '%s\n' "$job_error_title"
         printf '%s\n' "$FETCH_ERROR"
       } > "$ERROR_FILE"
       write_profile_status "$job_id" error download fetch "$job_started" "$job_finished" "$FETCH_HTTP_CODE" "$FETCH_HTTP_LINE" "$FETCH_BYTES" "$FETCH_ERROR" ""
       event_log ERROR "$job_id" "download failed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $FETCH_ERROR"
+      if [ "$FETCH_REVOKED" != 0 ]; then
+        load_state
+        if [ "$RUN_ENABLED" = 1 ] && [ "$ACTIVE_PROFILE_ID" = "$job_id" ]; then
+          event_log INFO "$job_id" "stopping Mihomo: the subscription was revoked"
+          kill -HUP 1 2>/dev/null || true
+        fi
+      fi
       return 0
     fi
     current_http="$FETCH_HTTP_CODE"
@@ -1980,9 +2138,9 @@ process_profile_job() {
     current_bytes="$FETCH_BYTES"
     write_profile_status "$job_id" running validating fetch "$job_started" 0 "$current_http" "$current_http_line" "$current_bytes" "Response saved; validating configuration" ""
     if [ "$FETCH_SOURCE_CHANGED" = 1 ]; then
-      event_log INFO "$job_id" "download completed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $current_bytes bytes; saved response changed"
+      event_log INFO "$job_id" "download completed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $current_bytes bytes, sha256 ${FETCH_SHA256:-?}; saved response changed"
     else
-      event_log INFO "$job_id" "download completed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $current_bytes bytes; response unchanged, flash write skipped"
+      event_log INFO "$job_id" "download completed${FETCH_HTTP_TRACE:+: $FETCH_HTTP_TRACE}; $current_bytes bytes, sha256 ${FETCH_SHA256:-?}; response unchanged, flash write skipped"
     fi
   else
     write_profile_status "$job_id" running building rebuild "$job_started" 0 "$current_http" "$current_http_line" "$current_bytes" "Building configuration from saved YAML" ""
@@ -2011,7 +2169,36 @@ process_profile_job() {
   fi
 }
 
+# Воркер снимает файл задания, как только берёт его в работу. Если он умер
+# посреди загрузки или сборки (на роутере это обычно OOM), статус так и
+# остался бы running: плановое обновление такую подписку пропускает, а
+# supervisor не ставит ей сборку. Поэтому при каждом старте воркера, в том
+# числе перезапуске сторожем, такие задания возвращаются в очередь.
+requeue_interrupted_jobs() {
+  for stalled_status in "$STATUS_DIR"/p-*.conf; do
+    [ -f "$stalled_status" ] || continue
+    stalled_id=${stalled_status##*/}
+    stalled_id=${stalled_id%.conf}
+    valid_profile_id "$stalled_id" || continue
+    [ -f "$PROFILES_DIR/$stalled_id.conf" ] || { rm -f "$stalled_status"; continue; }
+    [ ! -f "$JOBS_DIR/$stalled_id.request" ] || continue
+    conf_get "$stalled_status" STATE || true
+    case "$CONF_VALUE" in queued|running) ;; *) continue ;; esac
+    conf_get "$stalled_status" ACTION || true
+    stalled_action=$CONF_VALUE
+    case "$stalled_action" in fetch|rebuild) ;; *) stalled_action=rebuild ;; esac
+    [ "$stalled_action" = fetch ] || [ -s "$PROFILES_DIR/$stalled_id.source.yaml" ] || stalled_action=fetch
+    if queue_profile_job_runtime "$stalled_id" "$stalled_action" "interrupted job"; then
+      event_log INFO "$stalled_id" "interrupted $stalled_action job queued again"
+    else
+      write_profile_status "$stalled_id" error "$stalled_action" "$stalled_action" 0 "$(date +%s)" "" "" 0 "Задание было прервано" ""
+    fi
+  done
+}
+
 subscription_worker() {
+  adopt_self_pid
+  requeue_interrupted_jobs
   while :; do
     job_found=0
     for check_request in "$CHECKS_DIR"/c-*.request; do
@@ -2025,7 +2212,7 @@ subscription_worker() {
       job_id=${job_request##*/}
       job_id=${job_id%.request}
       valid_profile_id "$job_id" || { rm -f "$job_request"; continue; }
-      job_work="$job_request.work.$$"
+      job_work="$job_request.work.$SELF_PID"
       mv "$job_request" "$job_work" 2>/dev/null || continue
       conf_get "$job_work" ACTION || true
       job_action=$CONF_VALUE
@@ -2037,7 +2224,7 @@ subscription_worker() {
       if [ ! -f "$PROFILES_DIR/$job_id.conf" ]; then
         rm -f "$PROFILES_DIR/$job_id.source.yaml" "$PROFILES_DIR/$job_id.source.meta" \
           "$RUNTIME_DIR/$job_id.config.yaml" "$RUNTIME_DIR/$job_id.config.previous.yaml" "$RUNTIME_DIR/$job_id.config.failed.yaml" \
-          "$ERRORS_DIR/$job_id.txt" "$STATUS_DIR/$job_id.conf" "$STATUS_DIR/$job_id.version"
+          "$ERRORS_DIR/$job_id.txt" "$STATUS_DIR/$job_id.conf" "$STATUS_DIR/$job_id.version" "$STATUS_DIR/$job_id.denied"
       fi
     done
     [ "$job_found" = 1 ] && sleep 1 || sleep 2
@@ -2047,6 +2234,7 @@ subscription_worker() {
 # Состояние панели пересчитывается, только когда в state.conf поменялся её
 # источник: раньше URL декодировался и маркер читался каждые две секунды.
 panel_worker() {
+  adopt_self_pid
   panel_retry_at=0
   panel_signature=
   panel_url=
@@ -2061,7 +2249,7 @@ panel_worker() {
     fi
     panel_force=0
     if [ -f "$UI_REQUEST" ]; then
-      panel_work="$UI_REQUEST.work.$$"
+      panel_work="$UI_REQUEST.work.$SELF_PID"
       if mv "$UI_REQUEST" "$panel_work" 2>/dev/null; then
         rm -f "$panel_work"
         panel_force=1
@@ -2094,6 +2282,7 @@ panel_worker() {
 }
 
 refresh_timer() {
+  adopt_self_pid
   while :; do
     sleep 10
     now=$(date +%s)
@@ -2114,6 +2303,14 @@ refresh_timer() {
       timer_finished=$CONF_VALUE
       valid_number "$timer_finished" || timer_finished=0
       effective_refresh_seconds
+      # Провайдер отказал, но рабочая конфигурация пока оставлена:
+      # перепроверяем быстро, чтобы отозванная подписка не жила ещё
+      # несколько интервалов.
+      timer_denied=
+      [ ! -f "$STATUS_DIR/$timer_id.denied" ] || read -r timer_denied < "$STATUS_DIR/$timer_id.denied" 2>/dev/null || true
+      case "$timer_denied" in
+        1|2) [ "$EFFECTIVE_REFRESH" -le 300 ] || EFFECTIVE_REFRESH=300 ;;
+      esac
       if [ ! -s "$SOURCE" ]; then
         if [ "$timer_action" = fetch ] && [ $((now - timer_finished)) -lt "$EFFECTIVE_REFRESH" ]; then
           continue
@@ -2134,7 +2331,7 @@ refresh_timer() {
 }
 
 write_core_status() {
-  core_status_tmp="$CORE_STATUS.tmp.$$"
+  core_status_tmp="$CORE_STATUS.tmp.$SELF_PID"
   umask 077
   {
     printf 'STATE=%s\n' "$1"
@@ -2329,6 +2526,7 @@ supervisor() {
 }
 
 network_settings_watcher() {
+  adopt_self_pid
   applied_signature=$(cat "$NETWORK_SIGNATURE_FILE" 2>/dev/null || true)
   while :; do
     sleep 2
@@ -2369,12 +2567,50 @@ else
 fi
 route_cleanup
 gateway_probe_block || log "WARNING: ICMP gateway probe could not be blocked"
+start_httpd() { httpd -f -p 80 -h "$WEBROOT" -c "$HTTPD_CONF" & HTTPD_PID=$!; }
+start_network_watcher() { network_settings_watcher & NETWORK_WATCHER_PID=$!; }
+start_panel_worker() { panel_worker & PANEL_WORKER_PID=$!; }
+start_subscription_worker() { subscription_worker & SUBSCRIPTION_WORKER_PID=$!; }
+start_refresh_timer() { refresh_timer & REFRESH_TIMER_PID=$!; }
+
+# Сторож веб-сервера и фоновых циклов. Без него процесс, убитый OOM на
+# слабом роутере, пропадал до перезапуска контейнера: панель не открывалась
+# или подписки переставали обновляться. Живёт в подшелле, поэтому цикл
+# бесконечный: с завершением PID 1 его снимет ядро.
+watchdog() {
+  adopt_self_pid
+  while :; do
+    sleep 5
+    if ! kill -0 "$HTTPD_PID" 2>/dev/null; then
+      event_log ERROR system "web server stopped; restarting it"
+      start_httpd
+    fi
+    if ! kill -0 "$SUBSCRIPTION_WORKER_PID" 2>/dev/null; then
+      event_log ERROR system "subscription worker stopped; restarting it"
+      start_subscription_worker
+    fi
+    if ! kill -0 "$REFRESH_TIMER_PID" 2>/dev/null; then
+      event_log ERROR system "refresh timer stopped; restarting it"
+      start_refresh_timer
+    fi
+    if ! kill -0 "$PANEL_WORKER_PID" 2>/dev/null; then
+      event_log ERROR system "panel worker stopped; restarting it"
+      start_panel_worker
+    fi
+    if ! kill -0 "$NETWORK_WATCHER_PID" 2>/dev/null; then
+      event_log ERROR system "network settings watcher stopped; restarting it"
+      start_network_watcher
+    fi
+  done
+}
+
 setup_auth
 build_webroot
-httpd -f -p 80 -h "$WEBROOT" -c "$HTTPD_CONF" &
+start_httpd
 log "web UI started on :80"
-network_settings_watcher &
-panel_worker &
-subscription_worker &
-refresh_timer &
+start_network_watcher
+start_panel_worker
+start_subscription_worker
+start_refresh_timer
+watchdog &
 supervisor

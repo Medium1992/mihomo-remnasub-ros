@@ -92,6 +92,7 @@ Open `http://192.168.253.2/` after startup. RouterOS routing/mangle rules must d
 - refresh downloads the source regardless of the core state;
 - per-profile settings include provider interval/title handling, headers, and local overrides; closing with unsaved changes asks first;
 - **Duplicate** copies a profile, which then downloads its own YAML;
+- any subscription can be deleted: deleting the active one switches to another, and deleting the last one stops Mihomo and leaves an empty profile in its place;
 - **Source YAML** shows the latest raw HTTP response;
 - **Runtime YAML** shows the validated result after all overrides, and its **Changes** tab lists the sections added, changed, or removed relative to the subscription;
 - **Logs** shows container events and the core's own output, stored only in RAM.
@@ -132,7 +133,7 @@ The resulting configuration and the container log are available straight from th
 
 | Header | Default value |
 |---|---|
-| `x-hwid` | `RouterOS-Solomon` |
+| `x-hwid` | `RouterOS-<16 hex digits>`, generated per installation |
 | `x-device-os` | `RouterOS` |
 | `x-ver-os` | `7.23.3` |
 | `x-device-model` | `MikroTik RB5009UG+S+IN` |
@@ -141,6 +142,14 @@ The resulting configuration and the container log are available straight from th
 The value of each of these five keys can be changed, and the header itself can be switched off with the checkbox on the left. A disabled header is not sent at all -- for a required key that also means no default is substituted in its place. The value is kept so a single click brings it back; in the settings such a line is stored with a leading `#`.
 
 Custom headers can be added and switched off the same way. Names are compared case-insensitively.
+
+The default `x-hwid` is generated on first start and is unique per installation; installations made before this feature keep the previous shared value `RouterOS-Solomon` until you set your own. After the global headers change, every subscription is downloaded again. The container log records the exact headers sent with each request.
+
+### Refused access
+
+HTTP `401/403/404/410/451` removes the working configuration after three refusals in a row: a single refusal can also come from a protection layer in front of the panel, so after the first and the second one the working configuration is kept and the request is repeated in five minutes. When there is no working configuration yet, the refusal applies at once. After that the saved YAML is deleted, Mihomo stops and the interception is removed; the subscription keeps being requested at its usual interval, and the first successful response brings it back. Transport errors, timeouts, `5xx` and configurations Mihomo rejects keep the last working version.
+
+An expired, disabled or HWID-restricted subscription is removed at once, the same way: Remnawave answers such a request with HTTP 200 but sends the HWID policy headers (`x-hwid-not-supported`, `x-hwid-max-devices-reached`, `x-hwid-limit`) or only placeholder VLESS proxies with an all-zero UUID whose names carry the reason. A configuration with an empty `proxies` list and no `proxy-providers` counts the same. The reason is shown on the subscription card.
 
 ### Recognized response headers
 

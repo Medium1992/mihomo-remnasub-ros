@@ -38,7 +38,8 @@ export const ui = {
 
 export function requiredHeaders() {
   return [
-    ["x-hwid", "RouterOS-Solomon"],
+    // Значение по умолчанию у каждой установки своё и приходит с состоянием.
+    ["x-hwid", store.model.state.default_hwid || "RouterOS-Solomon"],
     ["x-device-os", "RouterOS"],
     ["x-ver-os", "7.23.3"],
     ["x-device-model", "MikroTik RB5009UG+S+IN"],

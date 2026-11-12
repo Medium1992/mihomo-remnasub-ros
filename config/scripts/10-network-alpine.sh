@@ -84,8 +84,17 @@ else
 fi
 
 # Нормализуем только стандартные ip rule. Дополнительные veth и таблицы здесь не поддерживаются.
+# Совпадать должно правило целиком ("from all lookup <table>"): скрипт
+# вызывается и на работающем перехвате, а исключения redir-tun
+# ("from all to <сеть> lookup main", приоритеты 10001-10004) тоже смотрят в
+# main. Раньше они удалялись при любой смене сетевых настроек, и UDP к
+# локальной сети, multicast и broadcast уходили в TUN до перезапуска ядра.
+plain_rule_prefs() {
+  ip rule show | awk -v table="$1" '$2 == "from" && $3 == "all" && $4 == "lookup" && $5 == table && NF == 5 {gsub(/:/, "", $1); print $1}'
+}
+
 for table in unspec masquerade; do
-  for pref in $(ip rule show | awk -v table="$table" '$0 ~ "lookup " table {gsub(/:/, "", $1); print $1}'); do
+  for pref in $(plain_rule_prefs "$table"); do
     ip rule del pref "$pref" 2>/dev/null || true
   done
 done
@@ -93,10 +102,11 @@ done
 normalize_rule() {
   table=$1
   wanted=$2
-  for pref in $(ip rule show | awk -v table="$table" '$0 ~ "lookup " table {gsub(/:/, "", $1); print $1}'); do
+  for pref in $(plain_rule_prefs "$table"); do
     ip rule del pref "$pref" 2>/dev/null || true
   done
-  ip rule add pref "$wanted" lookup "$table"
+  ip rule add pref "$wanted" lookup "$table" 2>/dev/null ||
+    echo "[net] could not restore the '$table' routing rule at priority $wanted" >&2
 }
 
 normalize_rule local 0
@@ -155,9 +165,17 @@ sysctl_apply TCP_SLOW_START_AFTER_IDLE net.ipv4.tcp_slow_start_after_idle "${NET
 sysctl_apply TCP_MTU_PROBING net.ipv4.tcp_mtu_probing "${NETWORK_TCP_MTU_PROBING:-system}"
 sysctl_apply TCP_FIN_TIMEOUT net.ipv4.tcp_fin_timeout "${NETWORK_TCP_FIN_TIMEOUT:-system}"
 
-cc_available=$(tr -cd 'a-z0-9_ ' < /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null)
+# В netns контейнера RouterOS списка алгоритмов может не быть вовсе: тогда в
+# панель уходит хотя бы действующий, а выбранный вручную всё равно пробуем
+# записать — sysctl_apply перечитает значение и честно покажет readonly.
+cc_available_path=/proc/sys/net/ipv4/tcp_available_congestion_control
+cc_list_known=0
+[ ! -r "$cc_available_path" ] || cc_list_known=1
+cc_available=$(tr -cd 'a-z0-9_ ' < "$cc_available_path" 2>/dev/null)
+[ -n "$cc_available" ] ||
+  cc_available=$(tr -cd 'a-z0-9_ ' < /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null)
 cc_wanted=${NETWORK_TCP_CONGESTION:-system}
-if [ "$cc_wanted" != system ] && ! printf ' %s ' "$cc_available" | grep -q " $cc_wanted "; then
+if [ "$cc_wanted" != system ] && [ "$cc_list_known" = 1 ] && ! printf ' %s ' "$cc_available" | grep -q " $cc_wanted "; then
   SYSCTL_REPORT="${SYSCTL_REPORT}SYSCTL_TCP_CONGESTION=unavailable
 "
 else

@@ -243,6 +243,7 @@ profile_detail_json() (
 # Общий хвост state.conf: всё, что не меняется ни одной из двух точек записи.
 # Пишется из уже перечитанных под блокировкой ST_*.
 emit_state_tail() {
+  printf 'DEFAULT_HWID=%s\n' "$ST_DEFAULT_HWID"
   printf 'MIHOMO_SNIFFER_QUIC_PORTS_B64=%s\n' "$ST_MIHOMO_SNIFFER_QUIC_PORTS_B64"
   printf 'MIHOMO_MODE=%s\n' "$ST_MIHOMO_MODE"
   printf 'GLOBAL_OVERRIDE_B64=%s\n' "$ST_GLOBAL_OVERRIDE_B64"
@@ -403,6 +404,41 @@ write_container_settings() {
   state_unlock
 }
 
+# Пустой профиль без адреса. Идентификатор — в BLANK_PROFILE_ID.
+create_blank_profile() {
+  blank_name="$1"
+  BLANK_PROFILE_ID="p-$(date +%s)"
+  blank_path=$(profile_file "$BLANK_PROFILE_ID") || return 1
+  blank_suffix=1
+  while [ -e "$blank_path" ]; do
+    BLANK_PROFILE_ID="p-$(date +%s)-$blank_suffix"
+    blank_path=$(profile_file "$BLANK_PROFILE_ID") || return 1
+    blank_suffix=$((blank_suffix + 1))
+  done
+  umask 077
+  {
+    printf 'PROFILE_VERSION=2\n'
+    printf 'NAME_B64=%s\n' "$(b64 "$blank_name")"
+    printf 'SUB_URL_B64=\n'
+    printf 'SUB_HEADERS_B64=\n'
+    printf 'LOCAL_OVERRIDE_ENABLED=0\n'
+    printf 'LOCAL_OVERRIDE_B64=\n'
+    printf 'LOCAL_FIND_PROCESS_MODE=inherit\n'
+    printf 'LOCAL_LOG_LEVEL=inherit\n'
+    printf 'LOCAL_IPV6=inherit\n'
+    printf 'LOCAL_STORE_SELECTED=inherit\n'
+    printf 'LOCAL_STORE_FAKE_IP=inherit\n'
+    printf 'LOCAL_SNIFFER_MODE=inherit\n'
+    printf 'LOCAL_MODE=inherit\n'
+    printf 'SUB_USE_PROVIDER_TITLE=1\n'
+    printf 'SUB_USE_PROVIDER_INTERVAL=1\n'
+    printf 'SUB_REFRESH_SECONDS=3600\n'
+    printf 'SUB_TIMEOUT_SECONDS=30\n'
+    printf 'SUB_INSECURE_TLS=0\n'
+    printf 'SUB_AGE_KEY_B64=\n'
+  } > "$blank_path" || { rm -f "$blank_path"; return 1; }
+}
+
 if [ "${REQUEST_METHOD:-GET}" = GET ]; then
   view_id="$ACTIVE_PROFILE_ID"
   requested_id=$(query_value profile_id)
@@ -424,6 +460,7 @@ if [ "${REQUEST_METHOD:-GET}" = GET ]; then
   printf '"listener_mode":"%s",' "$ST_LISTENER_MODE"
   printf '"global_headers_b64":"%s",' "$ST_GLOBAL_HEADERS_B64"
   printf '"default_user_agent_b64":"%s",' "$(b64 "$(default_mihomo_user_agent)")"
+  printf '"default_hwid":"%s",' "$ST_DEFAULT_HWID"
   printf '"mihomo_find_process_mode":"%s",' "$ST_MIHOMO_FIND_PROCESS_MODE"
   printf '"mihomo_log_level":"%s",' "$ST_MIHOMO_LOG_LEVEL"
   printf '"mihomo_mode":"%s",' "$ST_MIHOMO_MODE"
@@ -565,36 +602,8 @@ case "$action" in
     clean_name=$(printf '%s' "$name" | tr -d '\r\n')
     [ "$clean_name" = "$name" ] || deny 'Profile name must be one line'
     [ "${#name}" -le 80 ] || deny 'Profile name is too long'
-    profile_id="p-$(date +%s)"
-    profile_path=$(profile_file "$profile_id") || deny 'could not create profile id'
-    suffix=1
-    while [ -e "$profile_path" ]; do
-      profile_id="p-$(date +%s)-$suffix"
-      profile_path=$(profile_file "$profile_id") || deny 'could not create profile id'
-      suffix=$((suffix + 1))
-    done
-    umask 077
-    {
-      printf 'PROFILE_VERSION=2\n'
-      printf 'NAME_B64=%s\n' "$(b64 "$name")"
-      printf 'SUB_URL_B64=\n'
-      printf 'SUB_HEADERS_B64=\n'
-      printf 'LOCAL_OVERRIDE_ENABLED=0\n'
-      printf 'LOCAL_OVERRIDE_B64=\n'
-      printf 'LOCAL_FIND_PROCESS_MODE=inherit\n'
-      printf 'LOCAL_LOG_LEVEL=inherit\n'
-      printf 'LOCAL_IPV6=inherit\n'
-      printf 'LOCAL_STORE_SELECTED=inherit\n'
-      printf 'LOCAL_STORE_FAKE_IP=inherit\n'
-      printf 'LOCAL_SNIFFER_MODE=inherit\n'
-      printf 'LOCAL_MODE=inherit\n'
-      printf 'SUB_USE_PROVIDER_TITLE=1\n'
-      printf 'SUB_USE_PROVIDER_INTERVAL=1\n'
-      printf 'SUB_REFRESH_SECONDS=3600\n'
-      printf 'SUB_TIMEOUT_SECONDS=30\n'
-      printf 'SUB_INSECURE_TLS=0\n'
-      printf 'SUB_AGE_KEY_B64=\n'
-    } > "$profile_path"
+    create_blank_profile "$name" || deny 'could not create profile'
+    profile_id=$BLANK_PROFILE_ID
     json_headers
     printf '{"ok":true,"created":"%s"}\n' "$profile_id"
     exit 0
@@ -604,10 +613,33 @@ case "$action" in
     profile_path=$(profile_file "$target_id") || deny 'invalid profile id'
     [ -f "$profile_path" ] || deny 'profile not found'
     active_id="${ST_ACTIVE_PROFILE_ID:-$ACTIVE_PROFILE_ID}"
-    [ "$target_id" != "$active_id" ] || deny 'active profile cannot be deleted'
     status_load "$target_id"
     if [ -f "$JOBS_DIR/$target_id.request" ] || [ "$S_STATE" = running ]; then
       deny 'Подписка сейчас обновляется, удалите её после окончания'
+    fi
+    # Удалить можно любую подписку. Вместо активной выбирается другая, а на
+    # место последней встаёт пустая заготовка: без профиля панель не работает,
+    # и запускать в этом случае больше нечего.
+    delete_successor=
+    delete_blank=
+    if [ "$target_id" = "$active_id" ]; then
+      for delete_candidate in "$PROFILES_DIR"/p-*.conf; do
+        [ -f "$delete_candidate" ] || continue
+        delete_candidate_id=${delete_candidate##*/}
+        delete_candidate_id=${delete_candidate_id%.conf}
+        valid_profile_id "$delete_candidate_id" || continue
+        [ "$delete_candidate_id" != "$target_id" ] || continue
+        delete_successor=$delete_candidate_id
+        break
+      done
+      delete_run="$ST_RUN_ENABLED"
+      if [ -z "$delete_successor" ]; then
+        create_blank_profile 'Новая подписка' || deny 'Could not create an empty subscription'
+        delete_successor=$BLANK_PROFILE_ID
+        delete_blank=1
+        delete_run=0
+      fi
+      write_state "$delete_successor" "$delete_run"
     fi
     rm -f \
       "$profile_path" \
@@ -619,9 +651,25 @@ case "$action" in
       "$RUNTIME_DIR/$target_id.config.failed.yaml" \
       "$JOBS_DIR/$target_id.request" \
       "$STATUS_DIR/$target_id.conf" \
-      "$STATUS_DIR/$target_id.version"
+      "$STATUS_DIR/$target_id.version" \
+      "$STATUS_DIR/$target_id.denied"
+    if [ -n "$delete_successor" ]; then
+      # Ядро держит конфиг удалённой подписки в памяти: перезапуск переводит
+      # его на новую активную, а после последней — останавливает.
+      if [ "$delete_run" = 1 ] || [ -n "$delete_blank" ]; then
+        kill -HUP 1 2>/dev/null || true
+      fi
+      if [ -z "$delete_blank" ] && [ ! -s "$RUNTIME_DIR/$delete_successor.config.yaml" ]; then
+        profile_load "$PROFILES_DIR/$delete_successor.conf"
+        if [ -s "$PROFILES_DIR/$delete_successor.source.yaml" ]; then
+          queue_profile_job "$delete_successor" rebuild "active profile deleted"
+        elif [ -n "$P_SUB_URL_B64" ]; then
+          queue_profile_job "$delete_successor" fetch "active profile deleted"
+        fi
+      fi
+    fi
     json_headers
-    printf '{"ok":true,"deleted":"%s"}\n' "$target_id"
+    printf '{"ok":true,"deleted":"%s","active_profile_id":"%s"}\n' "$target_id" "${delete_successor:-$active_id}"
     exit 0
     ;;
   save-settings)
@@ -768,6 +816,10 @@ case "$action" in
     for network_timeout in "$network_ct_established" "$network_ct_syn_sent" "$network_ct_syn_recv" "$network_ct_fin_wait" "$network_ct_close_wait" "$network_ct_last_ack" "$network_ct_time_wait" "$network_ct_close" "$network_ct_unacknowledged" "$network_ct_udp_stream"; do
       valid_number "$network_timeout" && [ "$network_timeout" -ge 1 ] && [ "$network_timeout" -le 604800 ] || deny 'conntrack timeouts must be 1..604800 seconds'
     done
+    # Заголовки запроса меняют ответ Remnawave, поэтому после их правки
+    # подписки скачиваются заново, а не ждут планового обновления.
+    headers_changed=false
+    b64_text_matches "$ST_GLOBAL_HEADERS_B64" "$global_headers" || headers_changed=true
     panel_settings_changed=false
     [ "$ST_EXTERNAL_UI_PRESET" = "$ui_preset" ] || panel_settings_changed=true
     b64_text_matches "$ST_EXTERNAL_UI_URL_B64" "$ui_url" || panel_settings_changed=true
@@ -825,6 +877,17 @@ case "$action" in
       queue_profile_job "$active_id" rebuild "global settings changed"
       core_rebuild=true
     fi
+    if [ "$headers_changed" = true ]; then
+      for refetch_profile in "$PROFILES_DIR"/p-*.conf; do
+        [ -f "$refetch_profile" ] || continue
+        refetch_id=${refetch_profile##*/}
+        refetch_id=${refetch_id%.conf}
+        valid_profile_id "$refetch_id" || continue
+        profile_load "$refetch_profile"
+        [ -n "$P_SUB_URL_B64" ] || continue
+        queue_profile_job "$refetch_id" fetch "request headers changed" && source_refresh=true
+      done
+    fi
     json_headers
     printf '{"ok":true,"action":"save-settings","panel_update":%s,"core_rebuild":%s,"source_refresh":%s}\n' "$panel_update" "$core_rebuild" "$source_refresh"
     exit 0
@@ -837,7 +900,11 @@ active_id="${ST_ACTIVE_PROFILE_ID:-$ACTIVE_PROFILE_ID}"
 target_path=$(profile_file "$target_id") || deny 'invalid profile id'
 [ -f "$target_path" ] || deny 'profile not found'
 profile_load "$target_path"
-old_fetch_signature="$P_SUB_URL_B64|$P_SUB_HEADERS_B64|$P_SUB_TIMEOUT_SECONDS|$P_SUB_INSECURE_TLS|$P_SUB_AGE_KEY_B64"
+# Заголовки профиля уходят в запрос только при включённых локальных
+# переопределениях, поэтому в подпись загрузки они входят вместе с ним.
+old_fetch_headers=
+[ "$P_LOCAL_OVERRIDE_ENABLED" != 1 ] || old_fetch_headers="$P_SUB_HEADERS_B64"
+old_fetch_signature="$P_SUB_URL_B64|$old_fetch_headers|$P_SUB_TIMEOUT_SECONDS|$P_SUB_INSECURE_TLS|$P_SUB_AGE_KEY_B64"
 old_build_signature="$P_LOCAL_OVERRIDE_ENABLED|$P_LOCAL_OVERRIDE_B64|$P_LOCAL_MODE|$P_LOCAL_FIND_PROCESS_MODE|$P_LOCAL_LOG_LEVEL|$P_LOCAL_IPV6|$P_LOCAL_STORE_SELECTED|$P_LOCAL_STORE_FAKE_IP|$P_LOCAL_SNIFFER_MODE"
 url=$(form_value url)
 name=$(form_value name)
@@ -922,7 +989,9 @@ umask 077
   printf 'SUB_AGE_KEY_B64=%s\n' "$(b64 "$age_key")"
 } > "$tmp"
 persist_file_if_changed "$tmp" "$target_path" || deny 'could not save profile'
-new_fetch_signature="$(b64 "$url")|$(b64 "$headers")|$timeout|$insecure|$(b64 "$age_key")"
+new_fetch_headers=
+[ "$local_override_enabled" != 1 ] || new_fetch_headers="$(b64 "$headers")"
+new_fetch_signature="$(b64 "$url")|$new_fetch_headers|$timeout|$insecure|$(b64 "$age_key")"
 new_build_signature="$local_override_enabled|$(b64 "$local_override")|$local_mode|$local_find_process_mode|$local_log_level|$local_ipv6|$local_store_selected|$local_store_fake_ip|$local_sniffer_mode"
 queued=false
 queued_action=
