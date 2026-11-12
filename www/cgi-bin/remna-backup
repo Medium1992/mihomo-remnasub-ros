@@ -100,6 +100,12 @@ state_load
 # Запущено ли ядро, решает текущий контейнер, а не копия: восстановление не
 # должно ни ронять работающий шлюз, ни поднимать остановленный.
 restore_run="$ST_RUN_ENABLED"
+# x-hwid по умолчанию берётся из копии, а в копии, снятой до его появления,
+# остаётся текущий: иначе восстановление сменило бы устройство у провайдера.
+restore_hwid=
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in DEFAULT_HWID=*) restore_hwid=${line#*=} ;; esac
+done < "$stage/state.conf"
 for old_profile in "$PROFILES_DIR"/p-*.conf; do
   [ -f "$old_profile" ] || continue
   old_id=${old_profile##*/}
@@ -118,9 +124,10 @@ for restore_profile in "$stage"/p-*.conf; do
 done
 {
   while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in ACTIVE_PROFILE_ID=*|RUN_ENABLED=*) continue ;; esac
+    case "$line" in ACTIVE_PROFILE_ID=*|RUN_ENABLED=*|DEFAULT_HWID=*) continue ;; esac
     printf '%s\n' "$line"
   done < "$stage/state.conf"
+  printf 'DEFAULT_HWID=%s\n' "${restore_hwid:-$ST_DEFAULT_HWID}"
   printf 'ACTIVE_PROFILE_ID=%s\n' "$restore_active"
   printf 'RUN_ENABLED=%s\n' "$restore_run"
 } > "$stage/state.next"

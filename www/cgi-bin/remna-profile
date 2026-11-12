@@ -337,6 +337,9 @@ write_container_settings() {
     printf 'STATE_VERSION=5\n'
     printf 'ACTIVE_PROFILE_ID=%s\n' "$ST_ACTIVE_PROFILE_ID"
     printf 'RUN_ENABLED=%s\n' "$ST_RUN_ENABLED"
+    # Идентификатор установки форма не присылает, его надо перенести как есть:
+    # без этой строки x-hwid по умолчанию молча возвращался к общему.
+    printf 'DEFAULT_HWID=%s\n' "$ST_DEFAULT_HWID"
     printf 'GLOBAL_HEADERS_B64=%s\n' "$(b64 "$global_headers")"
     printf 'LISTENER_MODE=%s\n' "$listener_mode"
     printf 'REDIR_PORT=%s\n' "$redir_port"
