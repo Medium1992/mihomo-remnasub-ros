@@ -1905,6 +1905,7 @@ build_fail() {
 build_final_config() {
   BUILD_VALIDATION=
   BUILD_ERROR=
+  BUILD_UNCHANGED=0
   [ -s "$SOURCE" ] || {
     BUILD_ERROR="No downloaded subscription"
     [ "${BUILD_DRY_RUN:-0}" = 1 ] || printf '%s\n' "$BUILD_ERROR" > "$ERROR_FILE"
@@ -1980,18 +1981,23 @@ build_final_config() {
     build_fail "Эта конфигурация уже не запустилась в Mihomo, оставлена предыдущая рабочая"
     return 1
   fi
-  # Прошлый рабочий конфиг остаётся рядом: если новый пройдёт mihomo -t, но
-  # не сможет запуститься, supervisor вернёт его.
-  if [ -s "$FINAL" ] && ! cmp -s "$candidate" "$FINAL"; then
-    mv "$FINAL" "$FINAL_PREVIOUS" 2>/dev/null || true
+  # Итог совпал с установленным: ставить и версию поднимать нечего.
+  BUILD_UNCHANGED=0
+  if [ -s "$FINAL" ] && cmp -s "$candidate" "$FINAL"; then
+    BUILD_UNCHANGED=1
+    rm -f "$candidate"
+  else
+    # Прошлый рабочий конфиг остаётся рядом: если новый пройдёт mihomo -t, но
+    # не сможет запуститься, supervisor вернёт его.
+    [ ! -s "$FINAL" ] || mv "$FINAL" "$FINAL_PREVIOUS" 2>/dev/null || true
+    mv "$candidate" "$FINAL" || { build_fail "Validated configuration could not be installed"; return 1; }
+    final_version_file="$STATUS_DIR/$ACTIVE_PROFILE_ID.version"
+    final_version=$(cat "$final_version_file" 2>/dev/null || printf '0')
+    valid_number "$final_version" || final_version=0
+    final_version=$((final_version + 1))
+    printf '%s\n' "$final_version" > "$final_version_file.tmp.$SELF_PID"
+    mv "$final_version_file.tmp.$SELF_PID" "$final_version_file"
   fi
-  mv "$candidate" "$FINAL" || { build_fail "Validated configuration could not be installed"; return 1; }
-  final_version_file="$STATUS_DIR/$ACTIVE_PROFILE_ID.version"
-  final_version=$(cat "$final_version_file" 2>/dev/null || printf '0')
-  valid_number "$final_version" || final_version=0
-  final_version=$((final_version + 1))
-  printf '%s\n' "$final_version" > "$final_version_file.tmp.$SELF_PID"
-  mv "$final_version_file.tmp.$SELF_PID" "$final_version_file"
   update_source_meta_validation 1 "$BUILD_VALIDATION"
   rm -f "$build_prefix".*
   rm -f "$ERROR_FILE"
@@ -2079,6 +2085,20 @@ run_check_job() {
   BUILD_DRY_RUN=0
 }
 
+# Хеш конфига, с которым запущено ядро, пишет supervisor при старте и
+# стирает при выходе ядра. Совпадение с текущим FINAL значит, что
+# перезапускать незачем.
+CORE_RUNNING_HASH="$RUNTIME_DIR/core.running.sha256"
+file_sha256() {
+  { sha256sum "$1" 2>/dev/null || openssl dgst -sha256 -r "$1" 2>/dev/null; } | cut -c1-64
+}
+core_runs_final() {
+  [ -s "$FINAL" ] && [ -s "$CORE_RUNNING_HASH" ] || return 1
+  read -r core_running_value < "$CORE_RUNNING_HASH" 2>/dev/null || return 1
+  core_final_value=$(file_sha256 "$FINAL")
+  [ -n "$core_final_value" ] && [ "$core_running_value" = "$ACTIVE_PROFILE_ID:$core_final_value" ]
+}
+
 # Провайдер отказал окончательно: снимаем всё, из чего ядро могло бы снова
 # собраться со старыми credentials. Без YAML supervisor не станет его
 # пересобирать, а статус error не даёт ему поставить загрузку самому:
@@ -2150,11 +2170,20 @@ process_profile_job() {
   if build_final_config; then
     job_finished=$(date +%s)
     write_profile_status "$job_id" ready ready "$job_action" "$job_started" "$job_finished" "$current_http" "$current_http_line" "$current_bytes" "Configuration accepted by Mihomo" "$BUILD_VALIDATION"
-    event_log INFO "$job_id" "configuration accepted and installed"
+    if [ "${BUILD_UNCHANGED:-0}" = 1 ]; then
+      event_log INFO "$job_id" "configuration accepted; unchanged"
+    else
+      event_log INFO "$job_id" "configuration accepted and installed"
+    fi
     load_state
     if [ "$RUN_ENABLED" = 1 ] && [ "$ACTIVE_PROFILE_ID" = "$job_id" ]; then
       if [ -f "$JOBS_DIR/$job_id.request" ]; then
         event_log INFO "$job_id" "newer profile update is queued; delaying Mihomo switch"
+      elif core_runs_final; then
+        # Перезапуск рвёт все соединения через роутер, поэтому ядро, которое
+        # уже работает ровно на этом конфиге, не трогаем: иначе каждое
+        # плановое обновление с тем же ответом роняло бы трафик.
+        event_log INFO "$job_id" "Mihomo already runs this configuration; left running"
       else
         event_log INFO "$job_id" "requesting Mihomo restart with validated configuration"
         kill -HUP 1 2>/dev/null || true
@@ -2469,6 +2498,8 @@ supervisor() {
     fi
     case "$ROUTE_MODE" in tproxy|redir-tproxy) ROUTING_ACTIVE=1 ;; esac
     event_log INFO "$active_id" "starting Mihomo ($(mihomo -v 2>/dev/null | head -n1))"
+    printf '%s:%s\n' "$active_id" "$(file_sha256 "$FINAL")" > "$CORE_RUNNING_HASH.tmp" &&
+      mv "$CORE_RUNNING_HASH.tmp" "$CORE_RUNNING_HASH"
     start_core "$active_id"
     core_pid=$MIHOMO_PID
     core_started=$(date +%s)
@@ -2491,6 +2522,7 @@ supervisor() {
       rc=$?
     done
     MIHOMO_PID=
+    rm -f "$CORE_RUNNING_HASH"
     [ -z "$CORE_LOG_PID" ] || wait "$CORE_LOG_PID" 2>/dev/null
     gateway_probe_block || true
     route_cleanup
@@ -2566,6 +2598,7 @@ else
   log "WARNING: Alpine network settings could not be applied"
 fi
 route_cleanup
+rm -f "$CORE_RUNNING_HASH"
 gateway_probe_block || log "WARNING: ICMP gateway probe could not be blocked"
 start_httpd() { httpd -f -p 80 -h "$WEBROOT" -c "$HTTPD_CONF" & HTTPD_PID=$!; }
 start_network_watcher() { network_settings_watcher & NETWORK_WATCHER_PID=$!; }
