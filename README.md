@@ -39,7 +39,8 @@
 5. The candidate is checked with `mihomo -t` and becomes the runtime YAML only when validation succeeds.
 6. A failed update does not stop a previously valid running configuration.
 7. If a configuration passed validation but the core crashes with it three times in a row within 30 seconds of starting, the previous working one is restored and the crashing one is not installed again by scheduled refreshes. Restarts back off 5, 10, 20, 40, 60 seconds.
-8. The selected subscription and run/stop state survive container restarts.
+8. Applying a new configuration does not drop connections when it can be avoided. If the refreshed YAML is byte-for-byte the one the core already runs, nothing happens. Otherwise the container hot-reloads it through the Mihomo API (`PUT /configs`): open connections stay up and unchanged listeners, including the TUN, are kept. A full restart happens only when the change needs one: another subscription selected, the listener mode or the redir/tproxy port changed, or the controller secret changed. It also happens when the hot reload is refused. The events log says which way was taken.
+9. The selected subscription and run/stop state survive container restarts.
 
 ## ⚡ Quick Docker Start
 

@@ -2099,6 +2099,70 @@ core_runs_final() {
   [ -n "$core_final_value" ] && [ "$core_running_value" = "$ACTIVE_PROFILE_ID:$core_final_value" ]
 }
 
+# Что mihomo не может сменить на лету. Режим перехвата и порты redir/tproxy
+# держат правила, которые supervisor ставит вокруг ядра. Secret и адрес
+# контроллера горячая перезагрузка (PUT /configs) не перечитывает: они
+# задаются только при старте. Остальное — прокси, правила, DNS, sniffer,
+# свои листенеры подписки, log-level — ядро применяет без рестарта и без
+# обрыва уже открытых соединений. Ключ хранится хешем: в нём secret.
+CORE_RUNNING_KEY="$RUNTIME_DIR/core.running.key"
+core_restart_key() {
+  resolve_listener_mode
+  printf '%s|%s|%s|%s|%s' "$ACTIVE_PROFILE_ID" "$ROUTE_MODE" "$REDIR_PORT" "$TPROXY_PORT" "$EXTERNAL_UI_SECRET_B64" |
+    { sha256sum 2>/dev/null || openssl dgst -sha256 -r 2>/dev/null; } | cut -c1-64
+}
+core_can_reload() {
+  [ -s "$FINAL" ] && [ -s "$CORE_RUNNING_HASH" ] && [ -s "$CORE_RUNNING_KEY" ] || return 1
+  read -r core_running_key < "$CORE_RUNNING_KEY" 2>/dev/null || return 1
+  read -r core_running_value < "$CORE_RUNNING_HASH" 2>/dev/null || return 1
+  case "$core_running_value" in "$ACTIVE_PROFILE_ID":?*) ;; *) return 1 ;; esac
+  core_current_key=$(core_restart_key)
+  [ -n "$core_current_key" ] && [ "$core_running_key" = "$core_current_key" ]
+}
+
+# PUT /configs без пути: ядро перечитывает свой -f, то есть FINAL. busybox
+# wget умеет только GET и POST, поэтому запрос пишется руками и уходит
+# через nc (busybox nc в Alpine, GNU netcat в armv5). HTTP/1.0: ответив,
+# сервер сам закрывает соединение, и nc выходит.
+core_soft_reload() {
+  CORE_RELOAD_ERROR=
+  csr_secret=$(b64_decode_file "$EXTERNAL_UI_SECRET_B64")
+  case "$csr_secret" in
+    *"
+"*|*"$(printf '\r')"*) CORE_RELOAD_ERROR="secret contains a line break"; return 1 ;;
+  esac
+  csr_request="$RUNTIME_DIR/core.reload.$SELF_PID.request"
+  csr_response="$RUNTIME_DIR/core.reload.$SELF_PID.response"
+  umask 077
+  {
+    printf 'PUT /configs?force=true HTTP/1.0\r\n'
+    printf 'Host: 127.0.0.1:9090\r\n'
+    [ -z "$csr_secret" ] || printf 'Authorization: Bearer %s\r\n' "$csr_secret"
+    printf 'Content-Type: application/json\r\n'
+    printf 'Content-Length: 2\r\n'
+    printf 'Connection: close\r\n\r\n{}'
+  } > "$csr_request"
+  # Провайдеры подписки ядро грузит внутри запроса, это может занять время.
+  timeout -k 5 150 nc 127.0.0.1 9090 < "$csr_request" > "$csr_response" 2>/dev/null
+  csr_rc=$?
+  rm -f "$csr_request"
+  csr_status=$(head -n 1 "$csr_response" 2>/dev/null | tr -d '\r')
+  case "$csr_status" in
+    "HTTP/1."[01]" 204"*|"HTTP/1."[01]" 200"*)
+      rm -f "$csr_response"
+      return 0
+      ;;
+  esac
+  if [ -n "$csr_status" ]; then
+    csr_body=$(awk 'body { print } /^\r?$/ { body = 1 }' "$csr_response" 2>/dev/null | tr '\r\n' '  ' | head -c 300)
+    CORE_RELOAD_ERROR="$csr_status${csr_body:+: $csr_body}"
+  else
+    CORE_RELOAD_ERROR="controller did not answer (nc exit $csr_rc)"
+  fi
+  rm -f "$csr_response"
+  return 1
+}
+
 # Провайдер отказал окончательно: снимаем всё, из чего ядро могло бы снова
 # собраться со старыми credentials. Без YAML supervisor не станет его
 # пересобирать, а статус error не даёт ему поставить загрузку самому:
@@ -2184,6 +2248,16 @@ process_profile_job() {
         # уже работает ровно на этом конфиге, не трогаем: иначе каждое
         # плановое обновление с тем же ответом роняло бы трафик.
         event_log INFO "$job_id" "Mihomo already runs this configuration; left running"
+      elif core_can_reload; then
+        event_log INFO "$job_id" "applying the configuration to the running Mihomo without restart"
+        if core_soft_reload; then
+          printf '%s:%s\n' "$job_id" "$(file_sha256 "$FINAL")" > "$CORE_RUNNING_HASH.tmp.$SELF_PID" &&
+            mv "$CORE_RUNNING_HASH.tmp.$SELF_PID" "$CORE_RUNNING_HASH"
+          event_log INFO "$job_id" "configuration reloaded in Mihomo; open connections kept"
+        else
+          event_log ERROR "$job_id" "Mihomo hot reload failed: $CORE_RELOAD_ERROR; requesting Mihomo restart"
+          kill -HUP 1 2>/dev/null || true
+        fi
       else
         event_log INFO "$job_id" "requesting Mihomo restart with validated configuration"
         kill -HUP 1 2>/dev/null || true
@@ -2500,6 +2574,7 @@ supervisor() {
     event_log INFO "$active_id" "starting Mihomo ($(mihomo -v 2>/dev/null | head -n1))"
     printf '%s:%s\n' "$active_id" "$(file_sha256 "$FINAL")" > "$CORE_RUNNING_HASH.tmp" &&
       mv "$CORE_RUNNING_HASH.tmp" "$CORE_RUNNING_HASH"
+    core_restart_key > "$CORE_RUNNING_KEY.tmp" && mv "$CORE_RUNNING_KEY.tmp" "$CORE_RUNNING_KEY"
     start_core "$active_id"
     core_pid=$MIHOMO_PID
     core_started=$(date +%s)
@@ -2522,7 +2597,7 @@ supervisor() {
       rc=$?
     done
     MIHOMO_PID=
-    rm -f "$CORE_RUNNING_HASH"
+    rm -f "$CORE_RUNNING_HASH" "$CORE_RUNNING_KEY"
     [ -z "$CORE_LOG_PID" ] || wait "$CORE_LOG_PID" 2>/dev/null
     gateway_probe_block || true
     route_cleanup
@@ -2598,7 +2673,7 @@ else
   log "WARNING: Alpine network settings could not be applied"
 fi
 route_cleanup
-rm -f "$CORE_RUNNING_HASH"
+rm -f "$CORE_RUNNING_HASH" "$CORE_RUNNING_KEY" "$RUNTIME_DIR"/core.reload.*
 gateway_probe_block || log "WARNING: ICMP gateway probe could not be blocked"
 start_httpd() { httpd -f -p 80 -h "$WEBROOT" -c "$HTTPD_CONF" & HTTPD_PID=$!; }
 start_network_watcher() { network_settings_watcher & NETWORK_WATCHER_PID=$!; }
